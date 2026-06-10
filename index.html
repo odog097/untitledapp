@@ -10,9 +10,23 @@
 <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
 <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 <style>
-  html, body, #root { height: 100%; margin: 0; background: #000; }
+  html, body, #root { height: 100%; margin: 0; background: #050505; }
+  ::selection { background: #ff5500; color: #000; }
   input[type="range"] { -webkit-appearance: none; appearance: none; height: 2px; background: rgba(255,255,255,.2); }
   input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; width: 18px; height: 18px; background: #fff; border-radius: 0; }
+  button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 1px solid #ff5500; outline-offset: 2px; }
+  @keyframes eq1 { 0%,100%{height:30%} 50%{height:100%} }
+  @keyframes eq2 { 0%,100%{height:100%} 50%{height:40%} }
+  @keyframes eq3 { 0%,100%{height:55%} 50%{height:85%} }
+  .eq span { display:block; width:2px; background:#ff5500; }
+  .eq span:nth-child(1){ animation: eq1 .9s ease-in-out infinite; }
+  .eq span:nth-child(2){ animation: eq2 .7s ease-in-out infinite; }
+  .eq span:nth-child(3){ animation: eq3 1.1s ease-in-out infinite; }
+  @keyframes blink { 0%,55%{opacity:1} 56%,100%{opacity:0} }
+  .caret { animation: blink 1.2s steps(1) infinite; color:#ff5500; }
+  @media (prefers-reduced-motion: reduce) {
+    .eq span, .caret, .animate-pulse { animation: none !important; }
+  }
 </style>
 </head>
 <body>
@@ -201,7 +215,7 @@ function makeSupabase() {
 
 // ─── forme d'onde ─────────────────────────────────────────────
 
-function Waveform({ samples, progress, onSeek, height = 80, live = false, markers = [] }) {
+function Waveform({ samples, progress, onSeek, height = 80, live = false, markers = [], color = "#ffffff" }) {
   const ref = useRef(null);
   const bars = samples && samples.length ? samples : Array(120).fill(5);
 
@@ -236,7 +250,7 @@ function Waveform({ samples, progress, onSeek, height = 80, live = false, marker
           const played = live ? true : i / bars.length <= progress;
           return (
             <div key={i} className="flex-1 mx-px"
-              style={{ height: Math.max(norm * height, 2), backgroundColor: played ? "#ffffff" : "rgba(255,255,255,0.15)" }} />
+              style={{ height: Math.max(norm * height, 2), backgroundColor: played ? color : "rgba(255,255,255,0.15)" }} />
           );
         })}
       </div>
@@ -883,32 +897,40 @@ function UntitledApp() {
 
   // ─── lecteur plein écran (partagé entre les modes) ────────────────────
   const playerOverlay = showPlayer && current && (
-    <div className="absolute inset-0 bg-black z-20 flex flex-col items-center px-6">
+    <div className="absolute inset-0 bg-[#050505] z-20 flex flex-col items-center px-6">
       <button onClick={() => setShowPlayer(false)} className="self-center mt-3 mb-4 w-10 h-1 rounded-full bg-white/20" aria-label="fermer" />
-      {hasQueue && <div className="text-[11px] text-white/40">{queueInfo.label} · {queueInfo.index + 1}/{queueInfo.length}</div>}
-      <div className="flex-1 flex flex-col items-center justify-center w-full gap-7">
-        <h2 className="text-xl font-semibold text-center px-4">{current.title}</h2>
+      {hasQueue && (
+        <div className="text-[10px] tracking-[0.2em] text-white/40 uppercase">{queueInfo.label} · {queueInfo.index + 1}/{queueInfo.length}</div>
+      )}
+      <div className="flex-1 flex flex-col items-center justify-center w-full gap-8">
+        <div className="text-center px-2 w-full">
+          <p className="text-[10px] tracking-[0.25em] text-white/30 mb-2">en lecture</p>
+          <h2 className="text-2xl font-bold tracking-tight leading-tight break-words">{current.title}</h2>
+        </div>
         <div className="w-full">
-          <Waveform samples={current.waveform} progress={progress} onSeek={seek} height={96}
+          <Waveform samples={current.waveform} progress={progress} onSeek={seek} height={110} color="#ff5500"
             markers={[
               abLoop.a != null && current.duration ? abLoop.a / current.duration : null,
               abLoop.b != null && current.duration ? abLoop.b / current.duration : null,
             ]} />
-          <div className="flex justify-between text-[11px] text-white/40 mt-2">
-            <span>{timecode(currentTime)}</span><span>{timecode(current.duration)}</span>
+          <div className="flex justify-between text-[11px] mt-2 tabular-nums">
+            <span style={{ color: "#ff5500" }}>{timecode(currentTime)}</span>
+            <span className="text-white/40">{timecode(current.duration)}</span>
           </div>
         </div>
         <div className="flex items-center gap-6">
           <button onClick={() => setLoop(!loop)} className={`text-xl ${loop ? "text-white" : "text-white/35"}`}>⟳</button>
           {hasQueue && <button onClick={prevInQueue} className="text-xl text-white/70">⏮</button>}
-          <button onClick={() => play(current)} className="w-20 h-20 rounded-full border border-white flex items-center justify-center text-2xl">
+          <button onClick={() => play(current)}
+            className="w-20 h-20 rounded-full bg-white text-black flex items-center justify-center text-2xl active:scale-95 transition-transform">
             {isPlaying ? "❚❚" : "▶"}
           </button>
           {hasQueue && (
             <button onClick={nextInQueue} className={`text-xl ${queueInfo.index < queueInfo.length - 1 ? "text-white/70" : "text-white/20"}`}>⏭</button>
           )}
           <button onClick={toggleAB}
-            className={`text-[13px] border px-2 py-1 ${abLoop.a != null ? "border-white text-white" : "border-white/30 text-white/40"}`}>
+            className={`text-[13px] border px-2 py-1 ${abLoop.a != null ? "text-black" : "border-white/30 text-white/40"}`}
+            style={abLoop.a != null ? { backgroundColor: "#ff5500", borderColor: "#ff5500" } : {}}>
             a-b
           </button>
         </div>
@@ -925,37 +947,48 @@ function UntitledApp() {
   );
 
   const sharedOverlay = sharedProject && (
-    <div className="absolute inset-0 bg-black z-10 flex flex-col">
-      <header className="flex items-start justify-between px-5 pt-5 pb-3">
-        <div className="flex items-center gap-4 min-w-0">
-          <CoverThumb cover={sharedProject.cover} size={56} />
-          <div className="min-w-0">
-            <h2 className="text-lg font-semibold truncate">{sharedProject.name}</h2>
-            <p className="text-[11px] text-white/40">par {sharedProject.artist}</p>
+    <div className="absolute inset-0 bg-[#050505] z-10 flex flex-col">
+      <div className="relative shrink-0 overflow-hidden">
+        {sharedProject.cover && (
+          <div className="absolute inset-0" aria-hidden="true">
+            <img src={sharedProject.cover} alt="" className="w-full h-full object-cover opacity-30 blur-2xl scale-125" />
+            <div className="absolute inset-0" style={{ background: "linear-gradient(to bottom, rgba(5,5,5,0.3), #050505)" }} />
+          </div>
+        )}
+        <header className="relative flex items-start justify-between px-5 pt-5">
+          <p className="text-[10px] tracking-[0.25em] text-white/40">projet partagé</p>
+          <button onClick={closeSharedProject} className="text-sm opacity-60 shrink-0">fermer</button>
+        </header>
+        <div className="relative flex items-end gap-4 px-5 pt-4 pb-4">
+          <CoverThumb cover={sharedProject.cover} size={96} />
+          <div className="min-w-0 pb-1">
+            <h2 className="text-2xl font-bold tracking-tight leading-tight break-words">{sharedProject.name}</h2>
+            <p className="text-[12px] text-white/50 mt-1">par {sharedProject.artist}</p>
           </div>
         </div>
-        <button onClick={closeSharedProject} className="text-sm opacity-60 shrink-0">fermer</button>
-      </header>
-      <div className="px-5 flex gap-3 py-2">
-        <SmallButton onClick={() => startQueue(sharedProject.tracks.map((t) => t.id), sharedProject.name)}>▶ lire</SmallButton>
-        <SmallButton onClick={() => startQueue(shuffleArray(sharedProject.tracks.map((t) => t.id)), `${sharedProject.name} · aléatoire`)}>⤨ aléatoire</SmallButton>
-        <SmallButton onClick={() => {
-          if (navigator.clipboard) navigator.clipboard.writeText(shareUrlFor(sharedProject.code));
-          notify("lien copié");
-        }}>partager</SmallButton>
+        <div className="relative px-5 flex items-center gap-3 pb-4">
+          <button onClick={() => startQueue(sharedProject.tracks.map((t) => t.id), sharedProject.name)}
+            className="w-12 h-12 rounded-full flex items-center justify-center text-black text-lg active:scale-95 transition-transform"
+            style={{ backgroundColor: "#ff5500" }} aria-label="tout lire">
+            ▶
+          </button>
+          <SmallButton onClick={() => startQueue(shuffleArray(sharedProject.tracks.map((t) => t.id)), `${sharedProject.name} · aléatoire`)}>⤨ aléatoire</SmallButton>
+          <SmallButton onClick={() => {
+            if (navigator.clipboard) navigator.clipboard.writeText(shareUrlFor(sharedProject.code));
+            notify("lien copié");
+          }}>partager</SmallButton>
+        </div>
       </div>
       <div className="flex-1 overflow-y-auto px-5 pb-44">
         {sharedProject.tracks.map((t) => (
-          <TrackRow key={t.id} track={t} isCurrent={currentId === t.id} isPlaying={isPlaying} onPlay={() => play(t)}
+          <TrackRow key={t.id} track={t} isCurrent={currentId === t.id} isPlaying={isPlaying} progress={progress} onPlay={() => play(t)}
             onDownload={() => downloadTrack(t)} />
         ))}
       </div>
       {current && !showPlayer && (
         <button onClick={() => setShowPlayer(true)}
-          className="absolute bottom-4 left-0 right-0 border-t border-white/10 bg-black px-5 py-3 flex items-center justify-between">
-          <div className="absolute inset-0 pointer-events-none">
-            <div className="h-full bg-white/10" style={{ width: `${progress * 100}%` }} />
-          </div>
+          className="absolute bottom-4 left-0 right-0 border-t border-white/10 bg-black/85 backdrop-blur px-5 py-3 flex items-center justify-between overflow-hidden">
+          <div className="absolute top-0 left-0 h-[2px]" style={{ width: `${progress * 100}%`, backgroundColor: "#ff5500" }} />
           <span className="text-[13px] font-medium truncate relative z-10">{current.title}</span>
           <span className="text-lg relative z-10 px-2" onClick={(e) => { e.stopPropagation(); play(current); }}>
             {isPlaying ? "❚❚" : "▶"}
@@ -991,17 +1024,23 @@ function UntitledApp() {
   if (!user) {
     return (
       <div className="h-screen w-full bg-black text-white flex flex-col items-center justify-center px-8 lowercase" style={mono}>
-        <h1 className="text-2xl font-semibold mb-1">untitled</h1>
-        <p className="text-[12px] text-white/40 mb-10">un espace pour ta musique en cours</p>
+        <div className="flex items-end gap-1 mb-2" aria-hidden="true">
+          {[18, 34, 12, 42, 26, 48, 20, 38, 14, 30, 44, 22, 36, 16, 28].map((h, i) => (
+            <div key={i} style={{ width: 3, height: h, backgroundColor: i === 5 ? "#ff5500" : "rgba(255,255,255,0.25)" }} />
+          ))}
+        </div>
+        <h1 className="text-4xl font-bold tracking-tight mb-2">untitled<span className="caret">_</span></h1>
+        <p className="text-[12px] text-white/40 mb-12 tracking-wide">un espace pour ta musique en cours</p>
         <div className="w-full max-w-xs flex flex-col gap-5">
           <Field label="email" value={authEmail} onChange={setAuthEmail} placeholder="toi@email.com" type="email" />
           <Field label="mot de passe" value={authPassword} onChange={setAuthPassword} placeholder="6 caractères min" type="password" />
-          {authError && <p className="text-[12px] text-white/60 border border-white/20 p-3">{authError}</p>}
-          <button onClick={submitAuth} disabled={authBusy} className="bg-white text-black py-3 text-[14px] font-medium disabled:opacity-50">
+          {authError && <p className="text-[12px] text-white/70 border-l-2 pl-3 py-1" style={{ borderColor: "#ff5500" }}>{authError}</p>}
+          <button onClick={submitAuth} disabled={authBusy}
+            className="bg-white text-black py-3.5 text-[14px] font-semibold disabled:opacity-50 active:scale-[0.98] transition-transform">
             {authBusy ? "…" : authMode === "login" ? "se connecter" : "créer mon compte"}
           </button>
           <button onClick={() => { setAuthMode(authMode === "login" ? "signup" : "login"); setAuthError(""); }}
-            className="text-[12px] text-white/40 underline">
+            className="text-[12px] text-white/40 underline underline-offset-4">
             {authMode === "login" ? "pas de compte ? s'inscrire" : "déjà un compte ? se connecter"}
           </button>
         </div>
@@ -1084,7 +1123,7 @@ function UntitledApp() {
                 </div>
               )}
               {tracks.map((t) => (
-                <TrackRow key={t.id} track={t} isCurrent={currentId === t.id} isPlaying={isPlaying}
+                <TrackRow key={t.id} track={t} isCurrent={currentId === t.id} isPlaying={isPlaying} progress={progress}
                   onPlay={() => play(t)} onMore={() => setSheetTrackId(t.id)} />
               ))}
             </React.Fragment>
@@ -1156,7 +1195,7 @@ function UntitledApp() {
                 .map((id) => tracks.find((t) => t.id === id))
                 .filter(Boolean)
                 .map((t) => (
-                  <TrackRow key={t.id} track={t} isCurrent={currentId === t.id} isPlaying={isPlaying}
+                  <TrackRow key={t.id} track={t} isCurrent={currentId === t.id} isPlaying={isPlaying} progress={progress}
                     onPlay={() => play(t)} onMore={() => setSheetTrackId(t.id)} />
                 ))
             )}
@@ -1181,10 +1220,8 @@ function UntitledApp() {
 
       {current && !showPlayer && (
         <button onClick={() => setShowPlayer(true)}
-          className="absolute bottom-14 left-0 right-0 border-t border-white/10 bg-black px-5 py-3 flex items-center justify-between">
-          <div className="absolute inset-0 pointer-events-none">
-            <div className="h-full bg-white/10" style={{ width: `${progress * 100}%` }} />
-          </div>
+          className="absolute bottom-14 left-0 right-0 border-t border-white/10 bg-black/85 backdrop-blur px-5 py-3 flex items-center justify-between overflow-hidden">
+          <div className="absolute top-0 left-0 h-[2px]" style={{ width: `${progress * 100}%`, backgroundColor: "#ff5500" }} />
           <div className="relative z-10 text-left min-w-0">
             <div className="text-[13px] font-medium truncate">{current.title}</div>
             {(hasQueue || rate !== 1) && (
@@ -1203,7 +1240,8 @@ function UntitledApp() {
       <nav className="shrink-0 border-t border-white/10 bg-black flex" style={{ paddingBottom: "env(safe-area-inset-bottom)" }}>
         {[["library", "bibliothèque"], ["projects", "projets"], ["profile", "profil"]].map(([key, label]) => (
           <button key={key} onClick={() => { setTab(key); if (key !== "projects") setOpenProjectId(null); }}
-            className={`flex-1 py-4 text-[12px] ${tab === key ? "text-white" : "text-white/35"}`}>
+            className={`flex-1 py-4 text-[12px] relative ${tab === key ? "text-white font-medium" : "text-white/35"}`}>
+            {tab === key && <span className="absolute top-0 left-1/2 -translate-x-1/2 w-6 h-[2px]" style={{ backgroundColor: "#ff5500" }} />}
             {label}
           </button>
         ))}
@@ -1373,7 +1411,8 @@ function UntitledApp() {
 
 function Toast({ msg }) {
   return (
-    <div className="absolute top-5 left-1/2 -translate-x-1/2 bg-white text-black text-[12px] px-4 py-2 z-50 max-w-[85%] text-center">
+    <div className="absolute top-5 left-1/2 -translate-x-1/2 bg-black text-white text-[12px] px-4 py-2.5 z-50 max-w-[85%] text-center border border-white/15 border-l-2"
+      style={{ borderLeftColor: "#ff5500" }}>
       {msg}
     </div>
   );
@@ -1400,23 +1439,45 @@ function CoverThumb({ cover, size = 48, placeholder = "" }) {
   );
 }
 
-function TrackRow({ track, isCurrent, isPlaying, onPlay, onMore, onDownload }) {
+function TrackRow({ track, isCurrent, isPlaying, progress, onPlay, onMore, onDownload }) {
+  const wave = (track.waveform || []).filter((_, i) => i % 2 === 0);
+  const frac = isCurrent ? progress || 0 : 0;
   return (
-    <div className="flex items-center border-b border-white/10">
-      <button onClick={onPlay} className="flex-1 text-left py-4 min-w-0">
-        <div className={`text-[15px] truncate ${isCurrent ? "font-semibold" : "font-normal"}`}>
-          {track.title}
-          {track.notes ? <span className="text-white/30"> ✎</span> : null}
+    <div className="flex items-center gap-3 border-b border-white/10 group">
+      <button onClick={onPlay} aria-label="lecture"
+        className={`w-10 h-10 shrink-0 border flex items-center justify-center text-[11px] transition-colors
+          ${isCurrent ? "bg-white text-black border-white" : "border-white/25 text-white/70"}`}>
+        {isCurrent && isPlaying ? "❚❚" : "▶"}
+      </button>
+      <button onClick={onPlay} className="flex-1 text-left py-3.5 min-w-0">
+        <div className="flex items-center gap-2 min-w-0">
+          <span className={`text-[14px] truncate ${isCurrent ? "font-semibold" : "font-normal"}`}>
+            {track.title}
+          </span>
+          {track.notes ? <span className="text-white/30 text-[12px] shrink-0">✎</span> : null}
+          {isCurrent && isPlaying && (
+            <span className="eq flex items-end gap-[2px] h-3 shrink-0"><span/><span/><span/></span>
+          )}
         </div>
-        <div className="text-[11px] text-white/40 mt-1">
+        {wave.length > 0 && (
+          <div className="flex items-center h-[22px] mt-1.5 overflow-hidden" aria-hidden="true">
+            {wave.map((v, i) => (
+              <div key={i} className="flex-1 mx-px"
+                style={{
+                  height: Math.max((v > 1 ? v / 100 : v) * 22, 2),
+                  backgroundColor: i / wave.length <= frac ? "#ff5500" : "rgba(255,255,255,0.18)",
+                }} />
+            ))}
+          </div>
+        )}
+        <div className="text-[10px] text-white/35 mt-1.5 tabular-nums">
           {timecode(track.duration)}
           {(track.version || 1) > 1 ? ` · v${track.version}` : ""}
           {track.plays ? ` · ${track.plays} écoute${track.plays > 1 ? "s" : ""}` : ""}
-          {isCurrent && isPlaying ? " · en lecture" : ""}
         </div>
       </button>
-      {onDownload && <button onClick={onDownload} className="text-white/40 px-3 py-4 shrink-0 text-lg" aria-label="télécharger">⤓</button>}
-      {onMore && <button onClick={onMore} className="text-white/40 px-3 py-4 shrink-0 text-lg">…</button>}
+      {onDownload && <button onClick={onDownload} className="text-white/40 px-2 py-4 shrink-0 text-lg" aria-label="télécharger">⤓</button>}
+      {onMore && <button onClick={onMore} className="text-white/40 px-2 py-4 shrink-0 text-lg" aria-label="options">…</button>}
     </div>
   );
 }
