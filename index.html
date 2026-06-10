@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-<title>untitled — ta musique en cours</title>
+<title>Musifinity — Ton contrôle, ta musique</title>
 <meta name="theme-color" content="#000000" />
 <script src="https://cdn.tailwindcss.com"></script>
 <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
@@ -39,7 +39,7 @@ const { useState, useRef, useEffect, useCallback } = React;
 // ════════════════════════════════════════════════════════════
 const SUPABASE_URL = "https://evwnxqqpymglduwiuija.supabase.co";
 const ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImV2d254cXFweW1nbGR1d2l1aWphIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODEwNDE2MzAsImV4cCI6MjA5NjYxNzYzMH0.0K68Ot-egbro7tP5szwvw1km_k0eLq9So-tKWqlxjGo";
-const SESSION_KEY = "untitled_session";
+const SESSION_KEY = "musifinity_session";
 
 // ─── utilitaires ──────────────────────────────────────────────
 
@@ -120,6 +120,30 @@ const compressCoverToBlob = (file) =>
   });
 
 const SPEEDS = [0.5, 0.75, 1, 1.25, 1.5, 2];
+
+const gradientFor = (seed) => {
+  let h = 0;
+  for (let i = 0; i < (seed || "x").length; i++) h = (h * 31 + seed.charCodeAt(i)) >>> 0;
+  const a = h % 360, b = (a + 45) % 360;
+  return `linear-gradient(135deg, hsl(${a},85%,62%), hsl(${b},90%,48%))`;
+};
+
+const SearchIcon = () => (
+  <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round">
+    <circle cx="11" cy="11" r="7" /><path d="m20.5 20.5-4-4" />
+  </svg>
+);
+const UserIcon = () => (
+  <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+    <circle cx="12" cy="8" r="4" /><path d="M4.5 20.5c1.5-3.5 4.2-5 7.5-5s6 1.5 7.5 5" />
+  </svg>
+);
+const LockIcon = () => (
+  <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round">
+    <rect x="5" y="11" width="14" height="9" rx="2" /><path d="M8 11V7a4 4 0 0 1 8 0v4" />
+  </svg>
+);
+
 const extOf = (blob, fallback = "bin") => ({
   "audio/mpeg": "mp3", "audio/mp4": "m4a", "audio/x-m4a": "m4a", "audio/wav": "wav",
   "audio/x-wav": "wav", "audio/webm": "webm", "audio/ogg": "ogg", "audio/flac": "flac",
@@ -320,6 +344,9 @@ function UntitledApp() {
 
   const [sheetTrackId, setSheetTrackId] = useState(null);
   const [trimState, setTrimState] = useState(null);
+  const [showSearch, setShowSearch] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [showAddSheet, setShowAddSheet] = useState(false);
 
   const audioRef = useRef(null);
   const fileInputRef = useRef(null);
@@ -893,7 +920,7 @@ function UntitledApp() {
   const openProject = projects.find((p) => p.id === openProjectId) || null;
   const hasQueue = queueInfo.length > 0;
   const trimTrack = trimState ? tracks.find((t) => t.id === trimState.trackId) : null;
-  const mono = { fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace" };
+  const mono = { fontFamily: "-apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', Roboto, Inter, sans-serif" };
 
   // ─── lecteur plein écran (partagé entre les modes) ────────────────────
   const playerOverlay = showPlayer && current && (
@@ -960,7 +987,7 @@ function UntitledApp() {
           <button onClick={closeSharedProject} className="text-sm opacity-60 shrink-0">fermer</button>
         </header>
         <div className="relative flex items-end gap-4 px-5 pt-4 pb-4">
-          <CoverThumb cover={sharedProject.cover} size={96} />
+          <CoverThumb cover={sharedProject.cover} size={96} seed={sharedProject.name} />
           <div className="min-w-0 pb-1">
             <h2 className="text-2xl font-bold tracking-tight leading-tight break-words">{sharedProject.name}</h2>
             <p className="text-[12px] text-white/50 mt-1">par {sharedProject.artist}</p>
@@ -1004,7 +1031,7 @@ function UntitledApp() {
 
   if (booting) {
     return (
-      <div className="h-screen w-full bg-black text-white flex items-center justify-center lowercase" style={mono}>
+      <div className="h-screen w-full bg-black text-white flex items-center justify-center" style={mono}>
         <span className="w-3 h-3 rounded-full bg-white animate-pulse" />
       </div>
     );
@@ -1013,7 +1040,7 @@ function UntitledApp() {
   // visiteur non connecté arrivé par un lien partagé
   if (!user && sharedProject) {
     return (
-      <div className="h-screen w-full bg-black text-white flex flex-col overflow-hidden lowercase relative" style={mono}>
+      <div className="h-screen w-full bg-black text-white flex flex-col overflow-hidden relative" style={mono}>
         {sharedOverlay}
         {playerOverlay}
         {toast && <Toast msg={toast} />}
@@ -1023,14 +1050,14 @@ function UntitledApp() {
 
   if (!user) {
     return (
-      <div className="h-screen w-full bg-black text-white flex flex-col items-center justify-center px-8 lowercase" style={mono}>
+      <div className="h-screen w-full bg-black text-white flex flex-col items-center justify-center px-8" style={mono}>
         <div className="flex items-end gap-1 mb-2" aria-hidden="true">
           {[18, 34, 12, 42, 26, 48, 20, 38, 14, 30, 44, 22, 36, 16, 28].map((h, i) => (
             <div key={i} style={{ width: 3, height: h, backgroundColor: i === 5 ? "#ff5500" : "rgba(255,255,255,0.25)" }} />
           ))}
         </div>
-        <h1 className="text-4xl font-bold tracking-tight mb-2">untitled<span className="caret">_</span></h1>
-        <p className="text-[12px] text-white/40 mb-12 tracking-wide">un espace pour ta musique en cours</p>
+        <h1 className="text-4xl font-bold tracking-tight mb-2">Musifinity<span className="caret">_</span></h1>
+        <p className="text-[12px] text-white/40 mb-12 tracking-wide">Ton contrôle, ta musique</p>
         <div className="w-full max-w-xs flex flex-col gap-5">
           <Field label="email" value={authEmail} onChange={setAuthEmail} placeholder="toi@email.com" type="email" />
           <Field label="mot de passe" value={authPassword} onChange={setAuthPassword} placeholder="6 caractères min" type="password" />
@@ -1050,7 +1077,7 @@ function UntitledApp() {
   }
 
   return (
-    <div className="h-screen w-full bg-black text-white flex flex-col overflow-hidden lowercase relative" style={mono}>
+    <div className="h-screen w-full bg-black text-white flex flex-col overflow-hidden relative" style={mono}>
       <input ref={fileInputRef} type="file" accept="audio/*" multiple className="hidden"
         onChange={(e) => { handleFiles(e.target.files); e.target.value = ""; }} />
       <input ref={replaceInputRef} type="file" accept="audio/*" className="hidden"
@@ -1079,26 +1106,24 @@ function UntitledApp() {
           finally { setBusyMsg(""); }
         }} />
 
-      <header className="flex items-center justify-between px-5 pt-5 pb-3 shrink-0">
-        <h1 className="text-lg font-semibold tracking-tight">
-          {tab === "library" && "untitled"}
-          {tab === "projects" && (openProject ? openProject.name : "projets")}
-          {tab === "profile" && (profile.artist_name || "profil")}
-        </h1>
-        <div className="flex items-center gap-3">
-          {tab === "library" && (
-            <React.Fragment>
-              <button onClick={() => setShowListen(true)} className="text-[12px] border border-white/30 px-3 py-1.5">code</button>
-              <button onClick={startRecording} className="text-[12px] border border-white/30 px-3 py-1.5">● rec</button>
-              <button onClick={() => openImport()} className="text-2xl leading-none px-1">+</button>
-            </React.Fragment>
-          )}
-          {tab === "projects" && !openProject && (
-            <button onClick={createProject} className="text-2xl leading-none px-2">+</button>
-          )}
-          {tab === "projects" && openProject && (
-            <button onClick={() => setOpenProjectId(null)} className="text-sm opacity-60">← retour</button>
-          )}
+      <header className="flex items-center justify-between px-5 pt-5 pb-4 shrink-0">
+        {tab === "projects" && openProject ? (
+          <button onClick={() => setOpenProjectId(null)} className="flex items-center gap-2 min-w-0">
+            <span className="text-xl leading-none">←</span>
+            <span className="text-lg font-bold tracking-tight truncate">{openProject.name}</span>
+          </button>
+        ) : (
+          <h1 className="text-[26px] font-bold tracking-tight">Musifinity</h1>
+        )}
+        <div className="flex items-center gap-2 shrink-0">
+          <button onClick={() => setShowSearch(true)} aria-label="rechercher"
+            className="w-11 h-11 rounded-2xl bg-white/10 flex items-center justify-center active:bg-white/20 transition-colors">
+            <SearchIcon />
+          </button>
+          <button onClick={() => { setTab("profile"); setOpenProjectId(null); }} aria-label="profil"
+            className={`w-11 h-11 rounded-2xl flex items-center justify-center transition-colors ${tab === "profile" ? "bg-white text-black" : "bg-white/10 active:bg-white/20"}`}>
+            <UserIcon />
+          </button>
         </div>
       </header>
 
@@ -1134,18 +1159,32 @@ function UntitledApp() {
           projects.length === 0 ? (
             <EmptyState label="aucun projet" actions={[["créer un projet", createProject]]} />
           ) : (
-            projects.map((p) => (
-              <button key={p.id} onClick={() => setOpenProjectId(p.id)}
-                className="w-full text-left py-3 border-b border-white/10 flex items-center gap-4">
-                <CoverThumb cover={p.cover_url} size={48} />
-                <div className="min-w-0">
-                  <div className="text-[15px] font-medium truncate">{p.name}</div>
-                  <div className="text-[11px] text-white/40 mt-1">
-                    {p.trackIds.length} morceau{p.trackIds.length > 1 ? "x" : ""} · {p.is_public ? "partagé" : "privé"}
+            <div className="grid grid-cols-2 gap-x-4 gap-y-6 pt-1">
+              {projects.map((p) => (
+                <div key={p.id} onClick={() => setOpenProjectId(p.id)} role="button" tabIndex={0}
+                  onKeyDown={(e) => e.key === "Enter" && setOpenProjectId(p.id)} className="cursor-pointer">
+                  <div className="relative w-full aspect-square rounded-2xl overflow-hidden">
+                    {p.cover_url ? (
+                      <img src={p.cover_url} alt="" className="w-full h-full object-cover" />
+                    ) : (
+                      <div className="w-full h-full" style={{ background: gradientFor(p.name) }} />
+                    )}
+                    {p.trackIds.length > 0 && (
+                      <span role="button" aria-label="lire le projet"
+                        onClick={(e) => { e.stopPropagation(); startQueue([...p.trackIds].reverse(), p.name); }}
+                        className="absolute bottom-2 right-2 w-12 h-12 rounded-xl bg-black/45 backdrop-blur flex items-center justify-center text-white text-lg active:scale-95 transition-transform">
+                        ▶
+                      </span>
+                    )}
+                  </div>
+                  <div className="mt-2.5 text-[15px] font-semibold leading-snug break-words">{p.name}</div>
+                  <div className="flex items-center gap-1.5 text-[12px] text-white/40 mt-1">
+                    {!p.is_public && <LockIcon />}
+                    <span className="truncate">{profile.artist_name || "moi"}</span>
                   </div>
                 </div>
-              </button>
-            ))
+              ))}
+            </div>
           )
         )}
 
@@ -1153,7 +1192,7 @@ function UntitledApp() {
           <div>
             <div className="flex items-center gap-4 py-3">
               <button onClick={() => pickCover(openProject.id)}>
-                <CoverThumb cover={openProject.cover_url} size={72} placeholder="+ pochette" />
+                <CoverThumb cover={openProject.cover_url} size={72} placeholder="+ pochette" seed={openProject.name} />
               </button>
               <div className="flex-1 min-w-0">
                 <div className="text-[11px] text-white/40">
@@ -1247,12 +1286,88 @@ function UntitledApp() {
         ))}
       </nav>
 
+      {!sharedProject && !showPlayer && tab !== "profile" && (
+        <button onClick={() => setShowAddSheet(true)}
+          className="absolute left-1/2 -translate-x-1/2 rounded-full bg-[#1c1c1c]/90 backdrop-blur border border-white/10 px-7 py-3.5 text-[15px] font-semibold flex items-center gap-2 z-[15] shadow-xl active:scale-95 transition-transform"
+          style={{ bottom: current ? "7.6rem" : "4.6rem" }}>
+          <span className="text-xl leading-none">+</span> ajouter
+        </button>
+      )}
+
+      {showAddSheet && (
+        <div className="absolute inset-0 bg-black/70 z-30 flex flex-col justify-end" onClick={() => setShowAddSheet(false)}>
+          <div className="bg-[#0e0e0e] rounded-t-3xl border-t border-white/10 px-5 pt-3 pb-8 flex flex-col gap-1" onClick={(e) => e.stopPropagation()}>
+            <div className="w-10 h-1 rounded-full bg-white/20 self-center mb-3" />
+            <SheetAction label="importer un fichier audio" onClick={() => {
+              setShowAddSheet(false);
+              openImport(tab === "projects" && openProject ? openProject.id : null);
+            }} />
+            <SheetAction label="● enregistrer un mémo" onClick={() => { setShowAddSheet(false); startRecording(); }} />
+            <SheetAction label="nouveau projet" onClick={() => { setShowAddSheet(false); createProject(); }} />
+            <SheetAction label="écouter un lien (code)" onClick={() => { setShowAddSheet(false); setShowListen(true); }} />
+            <button onClick={() => setShowAddSheet(false)} className="text-[12px] text-white/40 pt-3">fermer</button>
+          </div>
+        </div>
+      )}
+
+      {showSearch && (() => {
+        const q = searchQuery.trim().toLowerCase();
+        const foundTracks = q ? tracks.filter((t) =>
+          (t.title || "").toLowerCase().includes(q) || (t.notes || "").toLowerCase().includes(q)) : [];
+        const foundProjects = q ? projects.filter((p) => (p.name || "").toLowerCase().includes(q)) : [];
+        return (
+          <div className="absolute inset-0 bg-[#050505] z-40 flex flex-col">
+            <div className="flex items-center gap-3 px-5 pt-5 pb-3">
+              <div className="flex-1 flex items-center gap-2.5 bg-white/10 rounded-2xl px-4 py-3">
+                <span className="text-white/40"><SearchIcon /></span>
+                <input autoFocus value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)}
+                  placeholder="rechercher un morceau, un projet…"
+                  className="bg-transparent flex-1 outline-none text-[15px] placeholder-white/30 min-w-0" />
+              </div>
+              <button onClick={() => { setShowSearch(false); setSearchQuery(""); }} className="text-[13px] text-white/60 shrink-0">fermer</button>
+            </div>
+            <div className="flex-1 overflow-y-auto px-5 pb-44">
+              {!q && <p className="text-white/30 text-[13px] pt-10 text-center">tape pour chercher dans ta bibliothèque</p>}
+              {q && foundProjects.length === 0 && foundTracks.length === 0 && (
+                <p className="text-white/30 text-[13px] pt-10 text-center">aucun résultat pour « {searchQuery} »</p>
+              )}
+              {foundProjects.length > 0 && (
+                <React.Fragment>
+                  <p className="text-[10px] tracking-[0.2em] text-white/35 uppercase pt-4 pb-2">projets</p>
+                  {foundProjects.map((p) => (
+                    <button key={p.id}
+                      onClick={() => { setShowSearch(false); setSearchQuery(""); setTab("projects"); setOpenProjectId(p.id); }}
+                      className="w-full flex items-center gap-3 py-2.5 text-left">
+                      <CoverThumb cover={p.cover_url} size={44} seed={p.name} />
+                      <div className="min-w-0">
+                        <div className="text-[14px] font-medium truncate">{p.name}</div>
+                        <div className="text-[11px] text-white/40">{p.trackIds.length} morceau{p.trackIds.length > 1 ? "x" : ""}</div>
+                      </div>
+                    </button>
+                  ))}
+                </React.Fragment>
+              )}
+              {foundTracks.length > 0 && (
+                <React.Fragment>
+                  <p className="text-[10px] tracking-[0.2em] text-white/35 uppercase pt-4 pb-1">morceaux</p>
+                  {foundTracks.map((t) => (
+                    <TrackRow key={t.id} track={t} isCurrent={currentId === t.id} isPlaying={isPlaying} progress={progress}
+                      onPlay={() => play(t)} onMore={() => { setShowSearch(false); setSearchQuery(""); setSheetTrackId(t.id); }} />
+                  ))}
+                </React.Fragment>
+              )}
+            </div>
+          </div>
+        );
+      })()}
+
       {playerOverlay}
       {sharedOverlay}
 
       {sheetTrack && (
-        <div className="absolute inset-0 bg-black/80 z-30 flex flex-col justify-end" onClick={() => setSheetTrackId(null)}>
-          <div className="bg-black border-t border-white/15 p-5 flex flex-col gap-1" onClick={(e) => e.stopPropagation()}>
+        <div className="absolute inset-0 bg-black/70 z-30 flex flex-col justify-end" onClick={() => setSheetTrackId(null)}>
+          <div className="bg-[#0e0e0e] rounded-t-3xl border-t border-white/10 px-5 pt-3 pb-8 flex flex-col gap-1" onClick={(e) => e.stopPropagation()}>
+            <div className="w-10 h-1 rounded-full bg-white/20 self-center mb-3" />
             <div className="text-[14px] font-medium pb-1">{sheetTrack.title}</div>
             <div className="text-[11px] text-white/40 pb-3">
               {timecode(sheetTrack.duration)} · v{sheetTrack.version || 1} · {sheetTrack.plays || 0} écoute{(sheetTrack.plays || 0) > 1 ? "s" : ""}
@@ -1428,12 +1543,12 @@ function NotesEditor({ initial, onSave }) {
   );
 }
 
-function CoverThumb({ cover, size = 48, placeholder = "" }) {
-  return cover ? (
-    <img src={cover} alt="" className="object-cover shrink-0" style={{ width: size, height: size }} />
-  ) : (
-    <div className="bg-white/5 border border-white/15 shrink-0 flex items-center justify-center text-[9px] text-white/40 text-center px-1"
-      style={{ width: size, height: size }}>
+function CoverThumb({ cover, size = 48, placeholder = "", seed = "" }) {
+  if (cover) return <img src={cover} alt="" className="object-cover shrink-0 rounded-xl" style={{ width: size, height: size }} />;
+  if (seed && !placeholder) return <div className="shrink-0 rounded-xl" style={{ width: size, height: size, background: gradientFor(seed) }} />;
+  return (
+    <div className="shrink-0 rounded-xl flex items-center justify-center text-[9px] text-white/70 text-center px-1"
+      style={{ width: size, height: size, background: seed ? gradientFor(seed) : "rgba(255,255,255,0.06)", border: seed ? "none" : "1px solid rgba(255,255,255,0.15)" }}>
       {placeholder}
     </div>
   );
@@ -1503,7 +1618,7 @@ function EmptyState({ label, actions }) {
 }
 
 function SmallButton({ children, onClick }) {
-  return <button onClick={onClick} className="border border-white/30 px-3 py-2 text-[12px]">{children}</button>;
+  return <button onClick={onClick} className="rounded-xl bg-white/10 px-3.5 py-2.5 text-[12px] font-medium active:bg-white/20 transition-colors">{children}</button>;
 }
 
 function Field({ label, value, onChange, placeholder = "", textarea = false, type = "text" }) {
