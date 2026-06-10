@@ -1,0 +1,1434 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+<title>untitled — ta musique en cours</title>
+<meta name="theme-color" content="#000000" />
+<script src="https://cdn.tailwindcss.com"></script>
+<script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<style>
+  html, body, #root { height: 100%; margin: 0; background: #000; }
+  input[type="range"] { -webkit-appearance: none; appearance: none; height: 2px; background: rgba(255,255,255,.2); }
+  input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; width: 18px; height: 18px; background: #fff; border-radius: 0; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel" data-presets="react">
+const { useState, useRef, useEffect, useCallback } = React;
+
+// ════════════════════════════════════════════════════════════
+//  CONFIG SUPABASE
+// ════════════════════════════════════════════════════════════
+const SUPABASE_URL = "https://evwnxqqpymglduwiuija.supabase.co";
+const ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImV2d254cXFweW1nbGR1d2l1aWphIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODEwNDE2MzAsImV4cCI6MjA5NjYxNzYzMH0.0K68Ot-egbro7tP5szwvw1km_k0eLq9So-tKWqlxjGo";
+const SESSION_KEY = "untitled_session";
+
+// ─── utilitaires ──────────────────────────────────────────────
+
+const timecode = (s) => {
+  if (!isFinite(s) || s < 0) return "0:00";
+  const t = Math.floor(s);
+  return `${Math.floor(t / 60)}:${String(t % 60).padStart(2, "0")}`;
+};
+const shareCodeGen = () => Math.random().toString(36).slice(2, 8);
+const shuffleArray = (arr) => {
+  const a = [...arr];
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+};
+
+async function computeWaveform(blob, count = 120) {
+  const ctx = new (window.AudioContext || window.webkitAudioContext)();
+  try {
+    const buffer = await ctx.decodeAudioData(await blob.arrayBuffer());
+    const data = buffer.getChannelData(0);
+    const chunk = Math.max(Math.floor(data.length / count), 1);
+    const samples = [];
+    for (let i = 0; i < data.length; i += chunk) {
+      let sum = 0;
+      const end = Math.min(i + chunk, data.length);
+      for (let j = i; j < end; j++) sum += data[j] * data[j];
+      samples.push(Math.sqrt(sum / (end - i)));
+    }
+    const peak = Math.max(...samples) || 1;
+    return { waveform: samples.map((v) => Math.round((v / peak) * 100)), duration: buffer.duration };
+  } finally { ctx.close(); }
+}
+
+function encodeWav(audioBuffer, startSec, endSec) {
+  const sr = audioBuffer.sampleRate;
+  const s0 = Math.max(0, Math.floor(startSec * sr));
+  const s1 = Math.min(audioBuffer.length, Math.floor(endSec * sr));
+  const len = Math.max(s1 - s0, 1);
+  const numCh = Math.min(audioBuffer.numberOfChannels, 2);
+  const buffer = new ArrayBuffer(44 + len * numCh * 2);
+  const view = new DataView(buffer);
+  const writeStr = (o, s) => { for (let i = 0; i < s.length; i++) view.setUint8(o + i, s.charCodeAt(i)); };
+  writeStr(0, "RIFF"); view.setUint32(4, 36 + len * numCh * 2, true); writeStr(8, "WAVE");
+  writeStr(12, "fmt "); view.setUint32(16, 16, true); view.setUint16(20, 1, true);
+  view.setUint16(22, numCh, true); view.setUint32(24, sr, true);
+  view.setUint32(28, sr * numCh * 2, true); view.setUint16(32, numCh * 2, true); view.setUint16(34, 16, true);
+  writeStr(36, "data"); view.setUint32(40, len * numCh * 2, true);
+  let off = 44;
+  const chans = [];
+  for (let c = 0; c < numCh; c++) chans.push(audioBuffer.getChannelData(c));
+  for (let i = s0; i < s1; i++) for (let c = 0; c < numCh; c++) {
+    const v = Math.max(-1, Math.min(1, chans[c][i]));
+    view.setInt16(off, v < 0 ? v * 0x8000 : v * 0x7fff, true);
+    off += 2;
+  }
+  return new Blob([buffer], { type: "audio/wav" });
+}
+
+const compressCoverToBlob = (file) =>
+  new Promise((resolve, reject) => {
+    const img = new Image();
+    const url = URL.createObjectURL(file);
+    img.onload = () => {
+      const size = 512;
+      const canvas = document.createElement("canvas");
+      canvas.width = size; canvas.height = size;
+      const ctx = canvas.getContext("2d");
+      const s = Math.min(img.width, img.height);
+      ctx.drawImage(img, (img.width - s) / 2, (img.height - s) / 2, s, s, 0, 0, size, size);
+      URL.revokeObjectURL(url);
+      canvas.toBlob((b) => (b ? resolve(b) : reject(new Error("conversion"))), "image/jpeg", 0.78);
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error("image illisible")); };
+    img.src = url;
+  });
+
+const SPEEDS = [0.5, 0.75, 1, 1.25, 1.5, 2];
+const extOf = (blob, fallback = "bin") => ({
+  "audio/mpeg": "mp3", "audio/mp4": "m4a", "audio/x-m4a": "m4a", "audio/wav": "wav",
+  "audio/x-wav": "wav", "audio/webm": "webm", "audio/ogg": "ogg", "audio/flac": "flac",
+  "audio/aac": "aac", "image/jpeg": "jpg",
+}[blob.type] || fallback);
+
+// ════════════════════════════════════════════════════════════
+//  CLIENT SUPABASE MINIMAL (fetch) + session persistante
+// ════════════════════════════════════════════════════════════
+function makeSupabase() {
+  let session = null;
+  try { session = JSON.parse(localStorage.getItem(SESSION_KEY) || "null"); } catch {}
+
+  const persist = () => {
+    try {
+      if (session) localStorage.setItem(SESSION_KEY, JSON.stringify(session));
+      else localStorage.removeItem(SESSION_KEY);
+    } catch {}
+  };
+
+  const authHeaders = () => ({
+    apikey: ANON_KEY,
+    Authorization: `Bearer ${session && session.access_token ? session.access_token : ANON_KEY}`,
+  });
+
+  const refresh = async () => {
+    if (!session || !session.refresh_token) return false;
+    try {
+      const r = await fetch(`${SUPABASE_URL}/auth/v1/token?grant_type=refresh_token`, {
+        method: "POST",
+        headers: { apikey: ANON_KEY, "Content-Type": "application/json" },
+        body: JSON.stringify({ refresh_token: session.refresh_token }),
+      });
+      if (!r.ok) { session = null; persist(); return false; }
+      session = await r.json();
+      persist();
+      return true;
+    } catch { return false; }
+  };
+
+  const request = async (path, opts = {}, retried = false) => {
+    const { method = "GET", body, headers = {}, raw = false } = opts;
+    const r = await fetch(`${SUPABASE_URL}${path}`, {
+      method,
+      headers: { ...authHeaders(), ...(body && !raw ? { "Content-Type": "application/json" } : {}), ...headers },
+      body: raw ? body : body ? JSON.stringify(body) : undefined,
+    });
+    if (r.status === 401 && !retried && (await refresh())) return request(path, opts, true);
+    if (!r.ok) {
+      const text = await r.text().catch(() => "");
+      throw new Error(`${r.status} ${text.slice(0, 200)}`);
+    }
+    const ct = r.headers.get("content-type") || "";
+    return ct.includes("json") ? r.json() : r.text();
+  };
+
+  return {
+    get session() { return session; },
+    get userId() { return session && session.user ? session.user.id : null; },
+    async restoreSession() {
+      if (!session) return null;
+      const ok = await refresh();
+      return ok ? session.user : null;
+    },
+    async signUp(email, password) {
+      const data = await request("/auth/v1/signup", { method: "POST", body: { email, password } });
+      if (data.access_token) { session = data; persist(); }
+      return data;
+    },
+    async signIn(email, password) {
+      session = await request("/auth/v1/token?grant_type=password", { method: "POST", body: { email, password } });
+      persist();
+      return session;
+    },
+    signOut() { session = null; persist(); },
+    select: (table, query = "") => request(`/rest/v1/${table}?${query}`),
+    insert: (table, rows) => request(`/rest/v1/${table}`, { method: "POST", body: rows, headers: { Prefer: "return=representation" } }),
+    update: (table, query, patch) => request(`/rest/v1/${table}?${query}`, { method: "PATCH", body: patch, headers: { Prefer: "return=representation" } }),
+    remove: (table, query) => request(`/rest/v1/${table}?${query}`, { method: "DELETE" }),
+    async upload(bucket, path, blob) {
+      await request(`/storage/v1/object/${bucket}/${path}`, {
+        method: "POST", body: blob, raw: true,
+        headers: { "Content-Type": blob.type || "application/octet-stream", "x-upsert": "true" },
+      });
+      return `${SUPABASE_URL}/storage/v1/object/public/${bucket}/${path}`;
+    },
+    removeFile(bucket, path) {
+      return request(`/storage/v1/object/${bucket}/${path}`, { method: "DELETE" }).catch(() => {});
+    },
+    publicUrl: (bucket, path) => `${SUPABASE_URL}/storage/v1/object/public/${bucket}/${path}`,
+  };
+}
+
+// ─── forme d'onde ─────────────────────────────────────────────
+
+function Waveform({ samples, progress, onSeek, height = 80, live = false, markers = [] }) {
+  const ref = useRef(null);
+  const bars = samples && samples.length ? samples : Array(120).fill(5);
+
+  const seekFromEvent = (e) => {
+    if (!onSeek || !ref.current) return;
+    const rect = ref.current.getBoundingClientRect();
+    const x = (e.touches ? e.touches[0].clientX : e.clientX) - rect.left;
+    onSeek(Math.min(Math.max(x / rect.width, 0), 1));
+  };
+
+  return (
+    <div className="relative w-full" style={{ height }}>
+      <div
+        ref={ref}
+        className={`flex items-center w-full h-full select-none touch-none ${onSeek ? "cursor-pointer" : ""}`}
+        onMouseDown={(e) => {
+          if (!onSeek) return;
+          seekFromEvent(e);
+          const move = (ev) => seekFromEvent(ev);
+          const up = () => {
+            window.removeEventListener("mousemove", move);
+            window.removeEventListener("mouseup", up);
+          };
+          window.addEventListener("mousemove", move);
+          window.addEventListener("mouseup", up);
+        }}
+        onTouchStart={seekFromEvent}
+        onTouchMove={seekFromEvent}
+      >
+        {bars.map((v, i) => {
+          const norm = v > 1 ? v / 100 : v;
+          const played = live ? true : i / bars.length <= progress;
+          return (
+            <div key={i} className="flex-1 mx-px"
+              style={{ height: Math.max(norm * height, 2), backgroundColor: played ? "#ffffff" : "rgba(255,255,255,0.15)" }} />
+          );
+        })}
+      </div>
+      {markers.map((m, i) => m != null && (
+        <div key={i} className="absolute top-0 bottom-0 w-px bg-white" style={{ left: `${m * 100}%` }}>
+          <span className="absolute -top-4 -translate-x-1/2 text-[9px] text-white/70">{i === 0 ? "a" : "b"}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ════════════════════════════════════════════════════════════
+//  APPLICATION
+// ════════════════════════════════════════════════════════════
+function UntitledApp() {
+  const sbRef = useRef(null);
+  if (!sbRef.current) sbRef.current = makeSupabase();
+  const sb = sbRef.current;
+
+  const [booting, setBooting] = useState(true);
+  const [user, setUser] = useState(null);
+  const [authMode, setAuthMode] = useState("login");
+  const [authEmail, setAuthEmail] = useState("");
+  const [authPassword, setAuthPassword] = useState("");
+  const [authBusy, setAuthBusy] = useState(false);
+  const [authError, setAuthError] = useState("");
+
+  const [tracks, setTracks] = useState([]);
+  const [projects, setProjects] = useState([]);
+  const [profile, setProfile] = useState({ artist_name: "artiste sans titre", bio: "", link: "" });
+  const [loadingData, setLoadingData] = useState(false);
+
+  const [tab, setTab] = useState("library");
+  const [openProjectId, setOpenProjectId] = useState(null);
+  const [showPicker, setShowPicker] = useState(false);
+  const [showPlayer, setShowPlayer] = useState(false);
+  const [toast, setToast] = useState("");
+  const [busyMsg, setBusyMsg] = useState("");
+
+  const [currentId, setCurrentId] = useState(null);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [progress, setProgress] = useState(0);
+  const [currentTime, setCurrentTime] = useState(0);
+  const [loop, setLoop] = useState(false);
+  const [rate, setRate] = useState(1);
+  const [preservePitch, setPreservePitch] = useState(true);
+  const [abLoop, setAbLoop] = useState({ a: null, b: null });
+  const abRef = useRef(abLoop); abRef.current = abLoop;
+
+  const queueRef = useRef({ ids: [], index: -1, label: "" });
+  const [queueInfo, setQueueInfo] = useState({ length: 0, index: -1, label: "" });
+
+  const [recording, setRecording] = useState(false);
+  const [recordTime, setRecordTime] = useState(0);
+  const [liveLevels, setLiveLevels] = useState([]);
+  const recorderRef = useRef(null);
+  const recordChunksRef = useRef([]);
+  const recordTimerRef = useRef(null);
+  const analyserCleanupRef = useRef(null);
+
+  const [showListen, setShowListen] = useState(false);
+  const [listenCode, setListenCode] = useState("");
+  const [listenLoading, setListenLoading] = useState(false);
+  const [sharedProject, setSharedProject] = useState(null);
+  const [statsView, setStatsView] = useState(null);
+
+  const [sheetTrackId, setSheetTrackId] = useState(null);
+  const [trimState, setTrimState] = useState(null);
+
+  const audioRef = useRef(null);
+  const fileInputRef = useRef(null);
+  const replaceInputRef = useRef(null);
+  const coverInputRef = useRef(null);
+  const importTargetRef = useRef(null);
+  const replaceTargetRef = useRef(null);
+  const coverTargetRef = useRef(null);
+  const loopRef = useRef(loop); loopRef.current = loop;
+  const rateRef = useRef(rate); rateRef.current = rate;
+  const preservePitchRef = useRef(preservePitch); preservePitchRef.current = preservePitch;
+
+  const allTracks = [...tracks, ...((sharedProject && sharedProject.tracks) || [])];
+  const allTracksRef = useRef(allTracks); allTracksRef.current = allTracks;
+  const current = allTracks.find((t) => t.id === currentId) || null;
+  const sheetTrack = tracks.find((t) => t.id === sheetTrackId) || null;
+
+  const notify = (msg) => { setToast(msg); setTimeout(() => setToast(""), 2800); };
+
+  const shareUrlFor = (slug) => `${location.origin}${location.pathname}?p=${slug}`;
+
+  // ─── démarrage : session sauvegardée + lien profond ?p= ───────────────
+
+  useEffect(() => {
+    (async () => {
+      const restored = await sb.restoreSession();
+      if (restored) {
+        setUser(restored);
+        loadAll();
+      }
+      const p = new URLSearchParams(location.search).get("p");
+      if (p) openSharedProject(p);
+      setBooting(false);
+    })();
+    // eslint-disable-next-line
+  }, []);
+
+  // ─── auth ─────────────────────────────────────────────────────────────
+
+  const submitAuth = async () => {
+    if (!authEmail.trim() || authPassword.length < 6) {
+      return setAuthError("email valide + mot de passe (6 caractères min)");
+    }
+    setAuthBusy(true); setAuthError("");
+    try {
+      if (authMode === "signup") {
+        const data = await sb.signUp(authEmail.trim(), authPassword);
+        if (!data.access_token) {
+          setAuthError("compte créé — confirme ton email puis connecte-toi");
+          setAuthMode("login"); setAuthBusy(false);
+          return;
+        }
+      } else {
+        await sb.signIn(authEmail.trim(), authPassword);
+      }
+      setUser(sb.session.user);
+      await loadAll();
+    } catch (e) {
+      const msg = String((e && e.message) || "");
+      setAuthError(
+        msg.includes("invalid_credentials") || msg.includes("Invalid login")
+          ? "identifiants incorrects"
+          : msg.includes("already") ? "un compte existe déjà avec cet email"
+          : "échec — vérifie tes identifiants ou ta connexion"
+      );
+    } finally { setAuthBusy(false); }
+  };
+
+  const logout = () => {
+    if (audioRef.current) audioRef.current.pause();
+    sb.signOut();
+    setUser(null); setTracks([]); setProjects([]); setSharedProject(null);
+    setCurrentId(null); setIsPlaying(false); clearQueue();
+  };
+
+  // ─── chargement ───────────────────────────────────────────────────────
+
+  const loadAll = async () => {
+    setLoadingData(true);
+    try {
+      const uid = sb.userId;
+      const [trackRows, projectRows, ptRows, profRows] = await Promise.all([
+        sb.select("tracks", `select=*&user_id=eq.${uid}&order=created_at.desc`),
+        sb.select("projects", `select=*&user_id=eq.${uid}&order=created_at.desc`),
+        sb.select("project_tracks", `select=project_id,track_id,position`),
+        sb.select("profiles", `select=*&id=eq.${uid}`),
+      ]);
+      const projIds = new Set(projectRows.map((p) => p.id));
+      const byProject = {};
+      for (const pt of ptRows) {
+        if (!projIds.has(pt.project_id)) continue;
+        (byProject[pt.project_id] = byProject[pt.project_id] || []).push(pt);
+      }
+      setTracks(trackRows.map((t) => ({
+        ...t,
+        url: sb.publicUrl("audio", t.file_path),
+        waveform: Array.isArray(t.waveform) ? t.waveform : [],
+      })));
+      setProjects(projectRows.map((p) => ({
+        ...p,
+        trackIds: (byProject[p.id] || []).sort((a, b) => a.position - b.position).map((x) => x.track_id),
+      })));
+      if (profRows[0]) setProfile(profRows[0]);
+    } catch (e) {
+      console.error(e);
+      notify("erreur de chargement de la bibliothèque");
+    } finally { setLoadingData(false); }
+  };
+
+  // ─── lecteur ──────────────────────────────────────────────────────────
+
+  useEffect(() => {
+    const audio = new Audio();
+    audio.crossOrigin = "anonymous";
+    audioRef.current = audio;
+    const onTime = () => {
+      if (!audio.duration) return;
+      const ab = abRef.current;
+      if (ab.a != null && ab.b != null && audio.currentTime >= ab.b) audio.currentTime = ab.a;
+      setProgress(audio.currentTime / audio.duration);
+      setCurrentTime(audio.currentTime);
+    };
+    const onEnd = () => {
+      const q = queueRef.current;
+      if (!loopRef.current && q.ids.length > 0 && q.index < q.ids.length - 1) {
+        playAtIndex(q.index + 1);
+      } else {
+        if (q.ids.length > 0 && !loopRef.current) clearQueue();
+        setIsPlaying(false); setProgress(0); setCurrentTime(0);
+      }
+    };
+    audio.addEventListener("timeupdate", onTime);
+    audio.addEventListener("ended", onEnd);
+    return () => {
+      audio.pause();
+      audio.removeEventListener("timeupdate", onTime);
+      audio.removeEventListener("ended", onEnd);
+    };
+    // eslint-disable-next-line
+  }, []);
+
+  useEffect(() => { if (audioRef.current) audioRef.current.loop = loop; }, [loop]);
+
+  const applyRate = (audio) => {
+    audio.playbackRate = rateRef.current;
+    try {
+      audio.preservesPitch = preservePitchRef.current;
+      audio.mozPreservesPitch = preservePitchRef.current;
+      audio.webkitPreservesPitch = preservePitchRef.current;
+    } catch {}
+  };
+  useEffect(() => { if (audioRef.current) applyRate(audioRef.current); /* eslint-disable-line */ }, [rate, preservePitch]);
+
+  useEffect(() => {
+    const onDragOver = (e) => e.preventDefault();
+    const onDrop = (e) => {
+      e.preventDefault();
+      if (!sb.userId) return;
+      const files = Array.from((e.dataTransfer && e.dataTransfer.files) || []).filter((f) => f.type.startsWith("audio/"));
+      if (files.length) handleFiles(files);
+    };
+    window.addEventListener("dragover", onDragOver);
+    window.addEventListener("drop", onDrop);
+    return () => {
+      window.removeEventListener("dragover", onDragOver);
+      window.removeEventListener("drop", onDrop);
+    };
+    // eslint-disable-next-line
+  }, []);
+
+  // ─── import / upload ──────────────────────────────────────────────────
+
+  const uploadTrack = async (blob, title, projectId = null) => {
+    const { waveform, duration } = await computeWaveform(blob).catch(() => ({ waveform: [], duration: 0 }));
+    const fileName = `${crypto.randomUUID()}.${extOf(blob, "mp3")}`;
+    const path = `${sb.userId}/${fileName}`;
+    await sb.upload("audio", path, blob);
+    const rows = await sb.insert("tracks", {
+      user_id: sb.userId, title, file_path: path, duration, waveform, notes: "",
+    });
+    const row = rows[0];
+    const track = { ...row, url: sb.publicUrl("audio", path) };
+    setTracks((prev) => [track, ...prev]);
+    if (projectId) {
+      await sb.insert("project_tracks", { project_id: projectId, track_id: row.id, position: 0 });
+      setProjects((prev) => prev.map((p) => (p.id === projectId ? { ...p, trackIds: [row.id, ...p.trackIds] } : p)));
+    }
+    return track;
+  };
+
+  const handleFiles = async (fileList) => {
+    const files = Array.from(fileList || []);
+    if (!files.length) return;
+    const projectId = importTargetRef.current;
+    importTargetRef.current = null;
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i];
+      setBusyMsg(`envoi ${i + 1}/${files.length} — ${file.name}`);
+      try {
+        await uploadTrack(file, file.name.replace(/\.[^.]+$/, "").toLowerCase(), projectId);
+      } catch (e) {
+        console.error(e);
+        notify(`échec : ${file.name}`);
+      }
+    }
+    setBusyMsg("");
+    notify("bibliothèque synchronisée ✓");
+  };
+
+  const openImport = (projectId = null) => {
+    importTargetRef.current = projectId;
+    if (fileInputRef.current) fileInputRef.current.click();
+  };
+
+  const updateTrack = async (id, patch) => {
+    setTracks((prev) => prev.map((t) => (t.id === id ? { ...t, ...patch } : t)));
+    try { await sb.update("tracks", `id=eq.${id}`, patch); } catch { notify("échec de la synchro"); }
+  };
+
+  const replaceAudio = async (trackId, file) => {
+    const track = tracks.find((t) => t.id === trackId);
+    if (!track) return;
+    setBusyMsg("remplacement de l'audio…");
+    try {
+      const { waveform, duration } = await computeWaveform(file).catch(() => ({ waveform: [], duration: 0 }));
+      const fileName = `${crypto.randomUUID()}.${extOf(file, "mp3")}`;
+      const path = `${sb.userId}/${fileName}`;
+      await sb.upload("audio", path, file);
+      await sb.update("tracks", `id=eq.${trackId}`, {
+        file_path: path, waveform, duration, version: (track.version || 1) + 1,
+      });
+      sb.removeFile("audio", track.file_path);
+      setTracks((prev) => prev.map((t) =>
+        t.id === trackId
+          ? { ...t, file_path: path, url: sb.publicUrl("audio", path), waveform, duration, version: (t.version || 1) + 1 }
+          : t
+      ));
+      notify("audio remplacé — nouvelle version");
+    } catch { notify("échec du remplacement"); }
+    finally { setBusyMsg(""); }
+  };
+
+  const deleteTrack = async (id) => {
+    const track = tracks.find((t) => t.id === id);
+    if (currentId === id) {
+      if (audioRef.current) audioRef.current.pause();
+      setCurrentId(null); setIsPlaying(false); clearQueue();
+    }
+    setTracks((prev) => prev.filter((t) => t.id !== id));
+    setProjects((prev) => prev.map((p) => ({ ...p, trackIds: p.trackIds.filter((x) => x !== id) })));
+    setSheetTrackId(null);
+    try {
+      await sb.remove("tracks", `id=eq.${id}`);
+      if (track) sb.removeFile("audio", track.file_path);
+    } catch { notify("échec de la suppression côté serveur"); }
+  };
+
+  // ─── enregistrement micro ─────────────────────────────────────────────
+
+  const startRecording = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mime = MediaRecorder.isTypeSupported("audio/mp4") ? "audio/mp4"
+        : MediaRecorder.isTypeSupported("audio/webm") ? "audio/webm" : "";
+      const recorder = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
+      recordChunksRef.current = [];
+      recorder.ondataavailable = (e) => { if (e.data.size > 0) recordChunksRef.current.push(e.data); };
+      recorder.onstop = async () => {
+        stream.getTracks().forEach((t) => t.stop());
+        const blob = new Blob(recordChunksRef.current, { type: recorder.mimeType });
+        const now = new Date();
+        setBusyMsg("envoi du mémo…");
+        try {
+          await uploadTrack(blob, `mémo ${now.getHours()}:${String(now.getMinutes()).padStart(2, "0")}`);
+          notify("mémo enregistré ✓");
+        } catch { notify("échec de l'envoi du mémo"); }
+        finally { setBusyMsg(""); }
+      };
+      recorderRef.current = recorder;
+      recorder.start();
+      setRecording(true); setRecordTime(0); setLiveLevels([]);
+      recordTimerRef.current = setInterval(() => setRecordTime((t) => t + 0.1), 100);
+
+      const ctx = new (window.AudioContext || window.webkitAudioContext)();
+      const source = ctx.createMediaStreamSource(stream);
+      const analyser = ctx.createAnalyser();
+      analyser.fftSize = 256;
+      source.connect(analyser);
+      const data = new Uint8Array(analyser.frequencyBinCount);
+      let raf;
+      const tick = () => {
+        analyser.getByteTimeDomainData(data);
+        let sum = 0;
+        for (let i = 0; i < data.length; i++) { const v = (data[i] - 128) / 128; sum += v * v; }
+        setLiveLevels((prev) => [...prev.slice(-119), Math.min(Math.sqrt(sum / data.length) * 3, 1)]);
+        raf = requestAnimationFrame(tick);
+      };
+      tick();
+      analyserCleanupRef.current = () => { cancelAnimationFrame(raf); ctx.close(); };
+    } catch { notify("accès micro refusé"); }
+  };
+
+  const stopRecording = (save = true) => {
+    clearInterval(recordTimerRef.current);
+    if (analyserCleanupRef.current) analyserCleanupRef.current();
+    analyserCleanupRef.current = null;
+    const recorder = recorderRef.current;
+    if (recorder && recorder.state !== "inactive") {
+      if (!save) {
+        const stream = recorder.stream;
+        recorder.ondataavailable = null;
+        recorder.onstop = () => stream.getTracks().forEach((t) => t.stop());
+      }
+      recorder.stop();
+    }
+    setRecording(false);
+  };
+
+  // ─── lecture & file ───────────────────────────────────────────────────
+
+  const playTrackById = useCallback((id) => {
+    const track = allTracksRef.current.find((t) => t.id === id);
+    const audio = audioRef.current;
+    if (!track || !audio) return;
+    audio.src = track.url;
+    audio.loop = loopRef.current;
+    applyRate(audio);
+    audio.play().catch(() => notify("lecture impossible"));
+    setAbLoop({ a: null, b: null });
+    setCurrentId(track.id);
+    setIsPlaying(true); setProgress(0); setCurrentTime(0);
+    setTracks((prev) => {
+      const mine = prev.find((t) => t.id === id);
+      if (mine) sb.update("tracks", `id=eq.${id}`, { plays: (mine.plays || 0) + 1 }).catch(() => {});
+      return prev.map((t) => (t.id === id ? { ...t, plays: (t.plays || 0) + 1 } : t));
+    });
+    // eslint-disable-next-line
+  }, []);
+
+  const playAtIndex = useCallback((index) => {
+    const q = queueRef.current;
+    if (index < 0 || index >= q.ids.length) return;
+    q.index = index;
+    setQueueInfo({ length: q.ids.length, index, label: q.label });
+    playTrackById(q.ids[index]);
+  }, [playTrackById]);
+
+  const clearQueue = () => {
+    queueRef.current = { ids: [], index: -1, label: "" };
+    setQueueInfo({ length: 0, index: -1, label: "" });
+  };
+
+  const startQueue = (ids, label) => {
+    if (!ids.length) return;
+    queueRef.current = { ids, index: 0, label };
+    setQueueInfo({ length: ids.length, index: 0, label });
+    playTrackById(ids[0]);
+    setShowPlayer(true);
+  };
+
+  const nextInQueue = () => {
+    const q = queueRef.current;
+    if (q.index < q.ids.length - 1) playAtIndex(q.index + 1);
+  };
+  const prevInQueue = () => {
+    const q = queueRef.current;
+    const audio = audioRef.current;
+    if (audio && audio.currentTime > 3) { audio.currentTime = 0; return; }
+    if (q.index > 0) playAtIndex(q.index - 1);
+  };
+
+  const play = useCallback((track) => {
+    const audio = audioRef.current;
+    if (!audio) return;
+    if (currentId === track.id) {
+      if (isPlaying) { audio.pause(); setIsPlaying(false); }
+      else { audio.play(); setIsPlaying(true); }
+      return;
+    }
+    clearQueue();
+    playTrackById(track.id);
+  }, [currentId, isPlaying, playTrackById]);
+
+  const seek = (fraction) => {
+    const audio = audioRef.current;
+    if (!audio || !audio.duration) return;
+    audio.currentTime = audio.duration * fraction;
+    setProgress(fraction);
+    setCurrentTime(audio.currentTime);
+  };
+
+  const toggleAB = () => {
+    const audio = audioRef.current;
+    if (!audio) return;
+    const { a, b } = abLoop;
+    if (a == null) { setAbLoop({ a: audio.currentTime, b: null }); notify("point a posé — repose pour le point b"); }
+    else if (b == null) { setAbLoop({ a, b: Math.max(audio.currentTime, a + 0.5) }); notify("boucle a-b active"); }
+    else { setAbLoop({ a: null, b: null }); notify("boucle a-b retirée"); }
+  };
+
+  const cycleSpeed = () => { const i = SPEEDS.indexOf(rate); setRate(SPEEDS[(i + 1) % SPEEDS.length]); };
+
+  // ─── rognage ──────────────────────────────────────────────────────────
+
+  const openTrim = (track) => {
+    setSheetTrackId(null);
+    setTrimState({ trackId: track.id, start: 0, end: track.duration || 0, duration: track.duration || 0, busy: false });
+  };
+
+  const executeTrim = async () => {
+    const st = trimState;
+    const track = tracks.find((t) => t.id === st.trackId);
+    if (!track || st.end - st.start < 0.2) return notify("sélection trop courte");
+    setTrimState({ ...st, busy: true });
+    try {
+      const blob = await (await fetch(track.url)).blob();
+      const ctx = new (window.AudioContext || window.webkitAudioContext)();
+      const buffer = await ctx.decodeAudioData(await blob.arrayBuffer());
+      ctx.close();
+      const wav = encodeWav(buffer, st.start, st.end);
+      setBusyMsg("envoi de la version rognée…");
+      await uploadTrack(wav, `${track.title} · rognée`);
+      notify("version rognée créée ✓");
+      setTrimState(null);
+    } catch {
+      notify("rognage impossible sur ce format");
+      setTrimState((s) => (s ? { ...s, busy: false } : s));
+    } finally { setBusyMsg(""); }
+  };
+
+  // ─── projets ──────────────────────────────────────────────────────────
+
+  const createProject = async () => {
+    const name = prompt("nom du projet");
+    if (!name || !name.trim()) return;
+    try {
+      const rows = await sb.insert("projects", { user_id: sb.userId, name: name.trim().toLowerCase(), is_public: false });
+      setProjects((prev) => [{ ...rows[0], trackIds: [] }, ...prev]);
+    } catch { notify("échec de la création"); }
+  };
+
+  const renameProject = async (project) => {
+    const name = prompt("nouveau nom", project.name);
+    if (!name || !name.trim()) return;
+    setProjects((prev) => prev.map((p) => (p.id === project.id ? { ...p, name: name.trim().toLowerCase() } : p)));
+    sb.update("projects", `id=eq.${project.id}`, { name: name.trim().toLowerCase() }).catch(() => notify("échec de la synchro"));
+  };
+
+  const toggleInProject = async (projectId, trackId) => {
+    const project = projects.find((p) => p.id === projectId);
+    const inProject = project && project.trackIds.includes(trackId);
+    setProjects((prev) => prev.map((p) =>
+      p.id === projectId
+        ? { ...p, trackIds: inProject ? p.trackIds.filter((x) => x !== trackId) : [trackId, ...p.trackIds] }
+        : p
+    ));
+    try {
+      if (inProject) await sb.remove("project_tracks", `project_id=eq.${projectId}&track_id=eq.${trackId}`);
+      else await sb.insert("project_tracks", { project_id: projectId, track_id: trackId, position: 0 });
+    } catch { notify("échec de la synchro"); }
+  };
+
+  const pickCover = (projectId) => {
+    coverTargetRef.current = projectId;
+    if (coverInputRef.current) coverInputRef.current.click();
+  };
+
+  const publishProject = async (project) => {
+    if (!project.trackIds.length) return notify("projet vide");
+    const slug = project.share_slug || shareCodeGen();
+    try {
+      await sb.update("projects", `id=eq.${project.id}`, { is_public: true, share_slug: slug });
+      setProjects((prev) => prev.map((p) => (p.id === project.id ? { ...p, is_public: true, share_slug: slug } : p)));
+      const url = shareUrlFor(slug);
+      if (navigator.clipboard) navigator.clipboard.writeText(url);
+      notify("publié — lien copié ✓");
+    } catch { notify("échec de la publication"); }
+  };
+
+  const unpublishProject = async (project) => {
+    try {
+      await sb.update("projects", `id=eq.${project.id}`, { is_public: false });
+      setProjects((prev) => prev.map((p) => (p.id === project.id ? { ...p, is_public: false } : p)));
+      notify("lien désactivé");
+    } catch { notify("échec"); }
+  };
+
+  const viewStats = async (project) => {
+    setStatsView({ loading: true });
+    try {
+      const rows = await sb.select("listens", `select=listener_name,created_at&project_id=eq.${project.id}&order=created_at.desc`);
+      const names = [...new Set(rows.map((r) => r.listener_name || "anonyme"))];
+      setStatsView({ plays: rows.length, listeners: names });
+    } catch { setStatsView({ plays: 0, listeners: [] }); }
+  };
+
+  // ─── écoute partagée (lien ou code) ───────────────────────────────────
+
+  const openSharedProject = async (rawCode) => {
+    const code = rawCode.trim().toLowerCase().replace(/[^a-z0-9]/g, "");
+    if (!code) return;
+    setListenLoading(true);
+    try {
+      const projs = await sb.select("projects", `select=*&share_slug=eq.${code}&is_public=eq.true`);
+      const proj = projs[0];
+      if (!proj) throw new Error("introuvable");
+      const profs = await sb.select("profiles", `select=artist_name&id=eq.${proj.user_id}`).catch(() => []);
+      const pts = await sb.select("project_tracks", `select=position,tracks(*)&project_id=eq.${proj.id}&order=position.asc`);
+      const loaded = pts.map((pt) => pt.tracks).filter(Boolean).map((t) => ({
+        ...t,
+        id: `shared-${t.id}`,
+        url: sb.publicUrl("audio", t.file_path),
+        waveform: Array.isArray(t.waveform) ? t.waveform : [],
+      }));
+      if (!loaded.length) throw new Error("vide");
+      setSharedProject({
+        code, projectId: proj.id, name: proj.name,
+        artist: (profs[0] && profs[0].artist_name) || "artiste",
+        cover: proj.cover_url, tracks: loaded,
+      });
+      setShowListen(false);
+      setListenCode("");
+      sb.insert("listens", {
+        project_id: proj.id,
+        listener_name: (profile.artist_name || "anonyme").slice(0, 40),
+      }).catch(() => {});
+    } catch { notify("lien ou code introuvable"); }
+    finally { setListenLoading(false); }
+  };
+
+  const closeSharedProject = () => {
+    if (sharedProject && String(currentId || "").startsWith("shared-")) {
+      if (audioRef.current) audioRef.current.pause();
+      setCurrentId(null); setIsPlaying(false); clearQueue();
+    }
+    setSharedProject(null);
+    if (new URLSearchParams(location.search).get("p")) {
+      history.replaceState(null, "", location.pathname);
+    }
+  };
+
+  const saveProfile = async (patch) => {
+    setProfile((prev) => ({ ...prev, ...patch }));
+    sb.update("profiles", `id=eq.${sb.userId}`, patch).catch(() => {});
+  };
+
+  const openProject = projects.find((p) => p.id === openProjectId) || null;
+  const hasQueue = queueInfo.length > 0;
+  const trimTrack = trimState ? tracks.find((t) => t.id === trimState.trackId) : null;
+  const mono = { fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace" };
+
+  // ─── lecteur plein écran (partagé entre les modes) ────────────────────
+  const playerOverlay = showPlayer && current && (
+    <div className="absolute inset-0 bg-black z-20 flex flex-col items-center px-6">
+      <button onClick={() => setShowPlayer(false)} className="self-center mt-3 mb-4 w-10 h-1 rounded-full bg-white/20" aria-label="fermer" />
+      {hasQueue && <div className="text-[11px] text-white/40">{queueInfo.label} · {queueInfo.index + 1}/{queueInfo.length}</div>}
+      <div className="flex-1 flex flex-col items-center justify-center w-full gap-7">
+        <h2 className="text-xl font-semibold text-center px-4">{current.title}</h2>
+        <div className="w-full">
+          <Waveform samples={current.waveform} progress={progress} onSeek={seek} height={96}
+            markers={[
+              abLoop.a != null && current.duration ? abLoop.a / current.duration : null,
+              abLoop.b != null && current.duration ? abLoop.b / current.duration : null,
+            ]} />
+          <div className="flex justify-between text-[11px] text-white/40 mt-2">
+            <span>{timecode(currentTime)}</span><span>{timecode(current.duration)}</span>
+          </div>
+        </div>
+        <div className="flex items-center gap-6">
+          <button onClick={() => setLoop(!loop)} className={`text-xl ${loop ? "text-white" : "text-white/35"}`}>⟳</button>
+          {hasQueue && <button onClick={prevInQueue} className="text-xl text-white/70">⏮</button>}
+          <button onClick={() => play(current)} className="w-20 h-20 rounded-full border border-white flex items-center justify-center text-2xl">
+            {isPlaying ? "❚❚" : "▶"}
+          </button>
+          {hasQueue && (
+            <button onClick={nextInQueue} className={`text-xl ${queueInfo.index < queueInfo.length - 1 ? "text-white/70" : "text-white/20"}`}>⏭</button>
+          )}
+          <button onClick={toggleAB}
+            className={`text-[13px] border px-2 py-1 ${abLoop.a != null ? "border-white text-white" : "border-white/30 text-white/40"}`}>
+            a-b
+          </button>
+        </div>
+        <div className="flex items-center gap-4 text-[12px]">
+          <button onClick={cycleSpeed} className="border border-white/30 px-3 py-1.5">vitesse {rate}×</button>
+          <button onClick={() => setPreservePitch(!preservePitch)}
+            className={`border px-3 py-1.5 ${preservePitch ? "border-white/30 text-white/60" : "border-white text-white"}`}>
+            {preservePitch ? "hauteur fixe" : "hauteur liée"}
+          </button>
+        </div>
+      </div>
+      <div className="h-10" />
+    </div>
+  );
+
+  const sharedOverlay = sharedProject && (
+    <div className="absolute inset-0 bg-black z-10 flex flex-col">
+      <header className="flex items-start justify-between px-5 pt-5 pb-3">
+        <div className="flex items-center gap-4 min-w-0">
+          <CoverThumb cover={sharedProject.cover} size={56} />
+          <div className="min-w-0">
+            <h2 className="text-lg font-semibold truncate">{sharedProject.name}</h2>
+            <p className="text-[11px] text-white/40">par {sharedProject.artist}</p>
+          </div>
+        </div>
+        <button onClick={closeSharedProject} className="text-sm opacity-60 shrink-0">fermer</button>
+      </header>
+      <div className="px-5 flex gap-3 py-2">
+        <SmallButton onClick={() => startQueue(sharedProject.tracks.map((t) => t.id), sharedProject.name)}>▶ lire</SmallButton>
+        <SmallButton onClick={() => startQueue(shuffleArray(sharedProject.tracks.map((t) => t.id)), `${sharedProject.name} · aléatoire`)}>⤨ aléatoire</SmallButton>
+        <SmallButton onClick={() => {
+          if (navigator.clipboard) navigator.clipboard.writeText(shareUrlFor(sharedProject.code));
+          notify("lien copié");
+        }}>partager</SmallButton>
+      </div>
+      <div className="flex-1 overflow-y-auto px-5 pb-44">
+        {sharedProject.tracks.map((t) => (
+          <TrackRow key={t.id} track={t} isCurrent={currentId === t.id} isPlaying={isPlaying} onPlay={() => play(t)} />
+        ))}
+      </div>
+      {current && !showPlayer && (
+        <button onClick={() => setShowPlayer(true)}
+          className="absolute bottom-4 left-0 right-0 border-t border-white/10 bg-black px-5 py-3 flex items-center justify-between">
+          <div className="absolute inset-0 pointer-events-none">
+            <div className="h-full bg-white/10" style={{ width: `${progress * 100}%` }} />
+          </div>
+          <span className="text-[13px] font-medium truncate relative z-10">{current.title}</span>
+          <span className="text-lg relative z-10 px-2" onClick={(e) => { e.stopPropagation(); play(current); }}>
+            {isPlaying ? "❚❚" : "▶"}
+          </span>
+        </button>
+      )}
+    </div>
+  );
+
+  // ════════════════════════════════════════════════════════════
+  //  RENDUS
+  // ════════════════════════════════════════════════════════════
+
+  if (booting) {
+    return (
+      <div className="h-screen w-full bg-black text-white flex items-center justify-center lowercase" style={mono}>
+        <span className="w-3 h-3 rounded-full bg-white animate-pulse" />
+      </div>
+    );
+  }
+
+  // visiteur non connecté arrivé par un lien partagé
+  if (!user && sharedProject) {
+    return (
+      <div className="h-screen w-full bg-black text-white flex flex-col overflow-hidden lowercase relative" style={mono}>
+        {sharedOverlay}
+        {playerOverlay}
+        {toast && <Toast msg={toast} />}
+      </div>
+    );
+  }
+
+  if (!user) {
+    return (
+      <div className="h-screen w-full bg-black text-white flex flex-col items-center justify-center px-8 lowercase" style={mono}>
+        <h1 className="text-2xl font-semibold mb-1">untitled</h1>
+        <p className="text-[12px] text-white/40 mb-10">un espace pour ta musique en cours</p>
+        <div className="w-full max-w-xs flex flex-col gap-5">
+          <Field label="email" value={authEmail} onChange={setAuthEmail} placeholder="toi@email.com" type="email" />
+          <Field label="mot de passe" value={authPassword} onChange={setAuthPassword} placeholder="6 caractères min" type="password" />
+          {authError && <p className="text-[12px] text-white/60 border border-white/20 p-3">{authError}</p>}
+          <button onClick={submitAuth} disabled={authBusy} className="bg-white text-black py-3 text-[14px] font-medium disabled:opacity-50">
+            {authBusy ? "…" : authMode === "login" ? "se connecter" : "créer mon compte"}
+          </button>
+          <button onClick={() => { setAuthMode(authMode === "login" ? "signup" : "login"); setAuthError(""); }}
+            className="text-[12px] text-white/40 underline">
+            {authMode === "login" ? "pas de compte ? s'inscrire" : "déjà un compte ? se connecter"}
+          </button>
+        </div>
+        {toast && <Toast msg={toast} />}
+      </div>
+    );
+  }
+
+  return (
+    <div className="h-screen w-full bg-black text-white flex flex-col overflow-hidden lowercase relative" style={mono}>
+      <input ref={fileInputRef} type="file" accept="audio/*" multiple className="hidden"
+        onChange={(e) => { handleFiles(e.target.files); e.target.value = ""; }} />
+      <input ref={replaceInputRef} type="file" accept="audio/*" className="hidden"
+        onChange={(e) => {
+          const f = e.target.files && e.target.files[0];
+          if (f && replaceTargetRef.current) replaceAudio(replaceTargetRef.current, f);
+          replaceTargetRef.current = null;
+          e.target.value = "";
+        }} />
+      <input ref={coverInputRef} type="file" accept="image/*" className="hidden"
+        onChange={async (e) => {
+          const f = e.target.files && e.target.files[0];
+          const pid = coverTargetRef.current;
+          coverTargetRef.current = null;
+          e.target.value = "";
+          if (!f || !pid) return;
+          setBusyMsg("envoi de la pochette…");
+          try {
+            const blob = await compressCoverToBlob(f);
+            const url = await sb.upload("covers", `${sb.userId}/${pid}.jpg`, blob);
+            const busted = `${url}?v=${Date.now()}`;
+            await sb.update("projects", `id=eq.${pid}`, { cover_url: busted });
+            setProjects((prev) => prev.map((p) => (p.id === pid ? { ...p, cover_url: busted } : p)));
+            notify("pochette mise à jour ✓");
+          } catch { notify("échec de l'envoi de la pochette"); }
+          finally { setBusyMsg(""); }
+        }} />
+
+      <header className="flex items-center justify-between px-5 pt-5 pb-3 shrink-0">
+        <h1 className="text-lg font-semibold tracking-tight">
+          {tab === "library" && "untitled"}
+          {tab === "projects" && (openProject ? openProject.name : "projets")}
+          {tab === "profile" && (profile.artist_name || "profil")}
+        </h1>
+        <div className="flex items-center gap-3">
+          {tab === "library" && (
+            <React.Fragment>
+              <button onClick={() => setShowListen(true)} className="text-[12px] border border-white/30 px-3 py-1.5">code</button>
+              <button onClick={startRecording} className="text-[12px] border border-white/30 px-3 py-1.5">● rec</button>
+              <button onClick={() => openImport()} className="text-2xl leading-none px-1">+</button>
+            </React.Fragment>
+          )}
+          {tab === "projects" && !openProject && (
+            <button onClick={createProject} className="text-2xl leading-none px-2">+</button>
+          )}
+          {tab === "projects" && openProject && (
+            <button onClick={() => setOpenProjectId(null)} className="text-sm opacity-60">← retour</button>
+          )}
+        </div>
+      </header>
+
+      <main className="flex-1 overflow-y-auto px-5 pb-44">
+        {loadingData && <p className="text-white/40 text-[13px] py-6 text-center">chargement de ta bibliothèque…</p>}
+
+        {!loadingData && tab === "library" && (
+          tracks.length === 0 ? (
+            <EmptyState
+              label="aucun morceau — tout ce que tu ajoutes est sauvegardé dans ton compte"
+              actions={[
+                ["importer un fichier audio", () => openImport()],
+                ["● enregistrer un mémo", startRecording],
+                ["écouter un lien (code)", () => setShowListen(true)],
+              ]} />
+          ) : (
+            <React.Fragment>
+              {tracks.length > 1 && (
+                <div className="flex gap-3 py-3">
+                  <SmallButton onClick={() => startQueue(tracks.map((t) => t.id), "bibliothèque")}>▶ tout lire</SmallButton>
+                  <SmallButton onClick={() => startQueue(shuffleArray(tracks.map((t) => t.id)), "bibliothèque · aléatoire")}>⤨ aléatoire</SmallButton>
+                </div>
+              )}
+              {tracks.map((t) => (
+                <TrackRow key={t.id} track={t} isCurrent={currentId === t.id} isPlaying={isPlaying}
+                  onPlay={() => play(t)} onMore={() => setSheetTrackId(t.id)} />
+              ))}
+            </React.Fragment>
+          )
+        )}
+
+        {!loadingData && tab === "projects" && !openProject && (
+          projects.length === 0 ? (
+            <EmptyState label="aucun projet" actions={[["créer un projet", createProject]]} />
+          ) : (
+            projects.map((p) => (
+              <button key={p.id} onClick={() => setOpenProjectId(p.id)}
+                className="w-full text-left py-3 border-b border-white/10 flex items-center gap-4">
+                <CoverThumb cover={p.cover_url} size={48} />
+                <div className="min-w-0">
+                  <div className="text-[15px] font-medium truncate">{p.name}</div>
+                  <div className="text-[11px] text-white/40 mt-1">
+                    {p.trackIds.length} morceau{p.trackIds.length > 1 ? "x" : ""} · {p.is_public ? "partagé" : "privé"}
+                  </div>
+                </div>
+              </button>
+            ))
+          )
+        )}
+
+        {!loadingData && tab === "projects" && openProject && (
+          <div>
+            <div className="flex items-center gap-4 py-3">
+              <button onClick={() => pickCover(openProject.id)}>
+                <CoverThumb cover={openProject.cover_url} size={72} placeholder="+ pochette" />
+              </button>
+              <div className="flex-1 min-w-0">
+                <div className="text-[11px] text-white/40">
+                  {openProject.trackIds.length} morceau{openProject.trackIds.length > 1 ? "x" : ""}
+                  {openProject.is_public ? " · partagé" : " · privé"}
+                </div>
+                <button onClick={() => renameProject(openProject)} className="text-[11px] text-white/40 underline mt-1">renommer</button>
+              </div>
+            </div>
+            {openProject.is_public && openProject.share_slug && (
+              <button
+                onClick={() => { if (navigator.clipboard) navigator.clipboard.writeText(shareUrlFor(openProject.share_slug)); notify("lien copié ✓"); }}
+                className="w-full text-left text-[11px] text-white/60 border border-white/15 px-3 py-2 mb-3 break-all">
+                {shareUrlFor(openProject.share_slug)}
+              </button>
+            )}
+            <div className="flex flex-wrap gap-3 pb-3">
+              {openProject.trackIds.length > 0 && (
+                <React.Fragment>
+                  <SmallButton onClick={() => startQueue([...openProject.trackIds].reverse(), openProject.name)}>▶ lire</SmallButton>
+                  <SmallButton onClick={() => startQueue(shuffleArray(openProject.trackIds), `${openProject.name} · aléatoire`)}>⤨ aléatoire</SmallButton>
+                </React.Fragment>
+              )}
+              <SmallButton onClick={() => publishProject(openProject)}>
+                {openProject.is_public ? "copier le lien" : "publier le lien"}
+              </SmallButton>
+              {openProject.is_public && (
+                <React.Fragment>
+                  <SmallButton onClick={() => viewStats(openProject)}>qui écoute ?</SmallButton>
+                  <SmallButton onClick={() => unpublishProject(openProject)}>désactiver</SmallButton>
+                </React.Fragment>
+              )}
+              <SmallButton onClick={() => setShowPicker(true)}>+ morceaux</SmallButton>
+            </div>
+            {openProject.trackIds.length === 0 ? (
+              <p className="text-white/40 text-sm py-8 text-center">projet vide — ajoute des morceaux</p>
+            ) : (
+              openProject.trackIds
+                .map((id) => tracks.find((t) => t.id === id))
+                .filter(Boolean)
+                .map((t) => (
+                  <TrackRow key={t.id} track={t} isCurrent={currentId === t.id} isPlaying={isPlaying}
+                    onPlay={() => play(t)} onMore={() => setSheetTrackId(t.id)} />
+                ))
+            )}
+          </div>
+        )}
+
+        {!loadingData && tab === "profile" && (
+          <div className="flex flex-col gap-5 pt-2">
+            <Field label="nom d'artiste" value={profile.artist_name || ""} onChange={(v) => saveProfile({ artist_name: v })} />
+            <Field label="bio" value={profile.bio || ""} onChange={(v) => saveProfile({ bio: v })} textarea />
+            <Field label="lien" value={profile.link || ""} onChange={(v) => saveProfile({ link: v })} placeholder="instagram, site…" />
+            <div className="border-t border-white/10 pt-4 text-[13px] text-white/60 flex gap-6">
+              <span>{tracks.length} morceau{tracks.length > 1 ? "x" : ""}</span>
+              <span>{projects.length} projet{projects.length > 1 ? "s" : ""}</span>
+              <span>{tracks.reduce((n, t) => n + (t.plays || 0), 0)} écoutes</span>
+            </div>
+            <p className="text-[11px] text-white/30 leading-relaxed">connecté : {user.email}</p>
+            <button onClick={logout} className="border border-white/30 py-3 text-[13px] text-white/60">se déconnecter</button>
+          </div>
+        )}
+      </main>
+
+      {current && !showPlayer && (
+        <button onClick={() => setShowPlayer(true)}
+          className="absolute bottom-14 left-0 right-0 border-t border-white/10 bg-black px-5 py-3 flex items-center justify-between">
+          <div className="absolute inset-0 pointer-events-none">
+            <div className="h-full bg-white/10" style={{ width: `${progress * 100}%` }} />
+          </div>
+          <div className="relative z-10 text-left min-w-0">
+            <div className="text-[13px] font-medium truncate">{current.title}</div>
+            {(hasQueue || rate !== 1) && (
+              <div className="text-[10px] text-white/40 truncate">
+                {hasQueue ? `${queueInfo.label} · ${queueInfo.index + 1}/${queueInfo.length}` : ""}
+                {rate !== 1 ? ` · ${rate}×` : ""}
+              </div>
+            )}
+          </div>
+          <span className="text-lg relative z-10 px-2 shrink-0" onClick={(e) => { e.stopPropagation(); play(current); }}>
+            {isPlaying ? "❚❚" : "▶"}
+          </span>
+        </button>
+      )}
+
+      <nav className="shrink-0 border-t border-white/10 bg-black flex" style={{ paddingBottom: "env(safe-area-inset-bottom)" }}>
+        {[["library", "bibliothèque"], ["projects", "projets"], ["profile", "profil"]].map(([key, label]) => (
+          <button key={key} onClick={() => { setTab(key); if (key !== "projects") setOpenProjectId(null); }}
+            className={`flex-1 py-4 text-[12px] ${tab === key ? "text-white" : "text-white/35"}`}>
+            {label}
+          </button>
+        ))}
+      </nav>
+
+      {playerOverlay}
+      {sharedOverlay}
+
+      {sheetTrack && (
+        <div className="absolute inset-0 bg-black/80 z-30 flex flex-col justify-end" onClick={() => setSheetTrackId(null)}>
+          <div className="bg-black border-t border-white/15 p-5 flex flex-col gap-1" onClick={(e) => e.stopPropagation()}>
+            <div className="text-[14px] font-medium pb-1">{sheetTrack.title}</div>
+            <div className="text-[11px] text-white/40 pb-3">
+              {timecode(sheetTrack.duration)} · v{sheetTrack.version || 1} · {sheetTrack.plays || 0} écoute{(sheetTrack.plays || 0) > 1 ? "s" : ""}
+            </div>
+            <SheetAction label="renommer" onClick={() => {
+              const name = prompt("nouveau titre", sheetTrack.title);
+              if (name && name.trim()) updateTrack(sheetTrack.id, { title: name.trim().toLowerCase() });
+            }} />
+            <SheetAction label="rogner (créer une version coupée)" onClick={() => openTrim(sheetTrack)} />
+            <SheetAction label="remplacer l'audio (nouvelle version)" onClick={() => {
+              replaceTargetRef.current = sheetTrack.id;
+              if (replaceInputRef.current) replaceInputRef.current.click();
+              setSheetTrackId(null);
+            }} />
+            <div className="py-2">
+              <span className="text-[11px] text-white/40 block mb-1">notes</span>
+              <NotesEditor key={sheetTrack.id} initial={sheetTrack.notes || ""} onSave={(v) => updateTrack(sheetTrack.id, { notes: v })} />
+            </div>
+            <SheetAction label="supprimer" danger onClick={() => deleteTrack(sheetTrack.id)} />
+            <button onClick={() => setSheetTrackId(null)} className="text-[12px] text-white/40 pt-3">fermer</button>
+          </div>
+        </div>
+      )}
+
+      {trimState && trimTrack && (
+        <div className="absolute inset-0 bg-black z-40 flex flex-col items-center justify-center px-6 gap-6">
+          <h3 className="text-base font-medium">rogner « {trimTrack.title} »</h3>
+          <div className="w-full relative">
+            <Waveform samples={trimTrack.waveform} progress={1} height={72} />
+            <div className="absolute top-0 bottom-0 bg-black/70 left-0"
+              style={{ width: `${(trimState.start / (trimState.duration || 1)) * 100}%` }} />
+            <div className="absolute top-0 bottom-0 bg-black/70 right-0"
+              style={{ width: `${(1 - trimState.end / (trimState.duration || 1)) * 100}%` }} />
+          </div>
+          <div className="w-full flex flex-col gap-4 text-[12px]">
+            <label className="flex items-center gap-3">
+              <span className="w-14 text-white/50">début</span>
+              <input type="range" min={0} max={trimState.duration} step={0.05} value={trimState.start}
+                onChange={(e) => setTrimState({ ...trimState, start: Math.min(parseFloat(e.target.value), trimState.end - 0.2) })}
+                className="flex-1" />
+              <span className="w-12 text-right tabular-nums">{timecode(trimState.start)}</span>
+            </label>
+            <label className="flex items-center gap-3">
+              <span className="w-14 text-white/50">fin</span>
+              <input type="range" min={0} max={trimState.duration} step={0.05} value={trimState.end}
+                onChange={(e) => setTrimState({ ...trimState, end: Math.max(parseFloat(e.target.value), trimState.start + 0.2) })}
+                className="flex-1" />
+              <span className="w-12 text-right tabular-nums">{timecode(trimState.end)}</span>
+            </label>
+            <p className="text-white/40 text-center">durée résultante : {timecode(trimState.end - trimState.start)}</p>
+          </div>
+          <div className="flex gap-4">
+            <button onClick={() => setTrimState(null)} className="border border-white/30 px-5 py-3 text-[13px]">annuler</button>
+            <button onClick={executeTrim} disabled={trimState.busy}
+              className="bg-white text-black px-5 py-3 text-[13px] font-medium disabled:opacity-50">
+              {trimState.busy ? "rognage…" : "✂ rogner"}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {recording && (
+        <div className="absolute inset-0 bg-black z-40 flex flex-col items-center justify-center px-6 gap-8">
+          <div className="flex items-center gap-3">
+            <span className="w-3 h-3 rounded-full bg-white animate-pulse" />
+            <span className="text-[13px] text-white/60">enregistrement</span>
+          </div>
+          <div className="text-4xl font-semibold tabular-nums">{timecode(recordTime)}</div>
+          <div className="w-full"><Waveform samples={liveLevels} live height={72} /></div>
+          <div className="flex gap-6">
+            <button onClick={() => stopRecording(false)} className="border border-white/30 px-6 py-3 text-[13px]">annuler</button>
+            <button onClick={() => stopRecording(true)} className="bg-white text-black px-6 py-3 text-[13px] font-medium">■ terminer</button>
+          </div>
+        </div>
+      )}
+
+      {showListen && (
+        <div className="absolute inset-0 bg-black/95 z-40 flex flex-col items-center justify-center px-8 gap-6">
+          <h3 className="text-base font-medium">écouter un projet partagé</h3>
+          <p className="text-[12px] text-white/40 text-center">colle le lien ou entre le code</p>
+          <input autoFocus value={listenCode} onChange={(e) => setListenCode(e.target.value)} placeholder="ex. k3x9p2"
+            className="bg-transparent border-b border-white/30 focus:border-white outline-none text-center text-xl py-2 w-64 tracking-widest placeholder-white/20" />
+          <div className="flex gap-4">
+            <button onClick={() => setShowListen(false)} className="border border-white/30 px-5 py-3 text-[13px]">annuler</button>
+            <button onClick={() => openSharedProject(listenCode.includes("p=") ? listenCode.split("p=")[1] : listenCode)} disabled={listenLoading}
+              className="bg-white text-black px-5 py-3 text-[13px] font-medium disabled:opacity-50">
+              {listenLoading ? "chargement…" : "écouter"}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {statsView && (
+        <div className="absolute inset-0 bg-black/95 z-40 flex flex-col items-center justify-center px-8 gap-5" onClick={() => setStatsView(null)}>
+          <h3 className="text-base font-medium">qui écoute ?</h3>
+          {statsView.loading ? (
+            <p className="text-white/40 text-[13px]">chargement…</p>
+          ) : (
+            <React.Fragment>
+              <p className="text-3xl font-semibold tabular-nums">{statsView.plays}</p>
+              <p className="text-[12px] text-white/40 -mt-3">ouverture{statsView.plays > 1 ? "s" : ""} du projet</p>
+              {statsView.listeners.length > 0 ? (
+                <div className="flex flex-col items-center gap-1 max-h-48 overflow-y-auto">
+                  {statsView.listeners.map((l) => <span key={l} className="text-[13px] text-white/70">{l}</span>)}
+                </div>
+              ) : (
+                <p className="text-[12px] text-white/30">personne pour l'instant</p>
+              )}
+            </React.Fragment>
+          )}
+          <p className="text-[11px] text-white/30">toucher pour fermer</p>
+        </div>
+      )}
+
+      {busyMsg && (
+        <div className="absolute inset-0 bg-black/95 z-40 flex flex-col items-center justify-center px-8 gap-5">
+          <span className="w-3 h-3 rounded-full bg-white animate-pulse" />
+          <p className="text-[13px] text-white/70 text-center">{busyMsg}</p>
+        </div>
+      )}
+
+      {showPicker && openProject && (
+        <div className="absolute inset-0 bg-black/95 z-30 flex flex-col p-6">
+          <div className="flex justify-between items-center mb-4">
+            <h3 className="text-base font-medium">ajouter à « {openProject.name} »</h3>
+            <button onClick={() => setShowPicker(false)} className="text-sm opacity-60">fermer</button>
+          </div>
+          <div className="flex-1 overflow-y-auto">
+            {tracks.length === 0 && <p className="text-white/40 text-sm">ta bibliothèque est vide. importe d'abord des morceaux.</p>}
+            {tracks.map((t) => {
+              const inProject = openProject.trackIds.includes(t.id);
+              return (
+                <button key={t.id} onClick={() => toggleInProject(openProject.id, t.id)}
+                  className="w-full flex justify-between items-center py-3 border-b border-white/10 text-left">
+                  <span className="text-[14px]">{t.title}</span>
+                  <span className={inProject ? "text-white" : "text-white/30"}>{inProject ? "✓" : "+"}</span>
+                </button>
+              );
+            })}
+          </div>
+          <SmallButton onClick={() => openImport(openProject.id)}>importer un nouveau fichier</SmallButton>
+        </div>
+      )}
+
+      {toast && <Toast msg={toast} />}
+    </div>
+  );
+}
+
+// ─── petits composants ────────────────────────────────────────
+
+function Toast({ msg }) {
+  return (
+    <div className="absolute top-5 left-1/2 -translate-x-1/2 bg-white text-black text-[12px] px-4 py-2 z-50 max-w-[85%] text-center">
+      {msg}
+    </div>
+  );
+}
+
+function NotesEditor({ initial, onSave }) {
+  const [value, setValue] = useState(initial);
+  return (
+    <textarea value={value} onChange={(e) => setValue(e.target.value)}
+      onBlur={() => value !== initial && onSave(value)}
+      placeholder="idées, paroles, mix à revoir…" rows={3}
+      className="w-full bg-transparent border border-white/20 focus:border-white outline-none p-2 text-[13px] placeholder-white/25" />
+  );
+}
+
+function CoverThumb({ cover, size = 48, placeholder = "" }) {
+  return cover ? (
+    <img src={cover} alt="" className="object-cover shrink-0" style={{ width: size, height: size }} />
+  ) : (
+    <div className="bg-white/5 border border-white/15 shrink-0 flex items-center justify-center text-[9px] text-white/40 text-center px-1"
+      style={{ width: size, height: size }}>
+      {placeholder}
+    </div>
+  );
+}
+
+function TrackRow({ track, isCurrent, isPlaying, onPlay, onMore }) {
+  return (
+    <div className="flex items-center border-b border-white/10">
+      <button onClick={onPlay} className="flex-1 text-left py-4 min-w-0">
+        <div className={`text-[15px] truncate ${isCurrent ? "font-semibold" : "font-normal"}`}>
+          {track.title}
+          {track.notes ? <span className="text-white/30"> ✎</span> : null}
+        </div>
+        <div className="text-[11px] text-white/40 mt-1">
+          {timecode(track.duration)}
+          {(track.version || 1) > 1 ? ` · v${track.version}` : ""}
+          {track.plays ? ` · ${track.plays} écoute${track.plays > 1 ? "s" : ""}` : ""}
+          {isCurrent && isPlaying ? " · en lecture" : ""}
+        </div>
+      </button>
+      {onMore && <button onClick={onMore} className="text-white/40 px-3 py-4 shrink-0 text-lg">…</button>}
+    </div>
+  );
+}
+
+function SheetAction({ label, onClick, danger = false }) {
+  return (
+    <button onClick={onClick}
+      className={`text-left py-3 border-b border-white/10 text-[14px] ${danger ? "text-white/50" : "text-white"}`}>
+      {label}
+    </button>
+  );
+}
+
+function EmptyState({ label, actions }) {
+  return (
+    <div className="flex flex-col items-center justify-center gap-4 pt-20">
+      <p className="text-white/40 text-[14px] mb-1 text-center px-4 leading-relaxed">{label}</p>
+      {actions.map(([text, fn]) => (
+        <button key={text} onClick={fn} className="border border-white px-5 py-3 text-[13px] font-medium">{text}</button>
+      ))}
+    </div>
+  );
+}
+
+function SmallButton({ children, onClick }) {
+  return <button onClick={onClick} className="border border-white/30 px-3 py-2 text-[12px]">{children}</button>;
+}
+
+function Field({ label, value, onChange, placeholder = "", textarea = false, type = "text" }) {
+  const cls = "w-full bg-transparent border-b border-white/20 py-2 text-[14px] outline-none focus:border-white placeholder-white/25";
+  return (
+    <label className="block">
+      <span className="text-[11px] text-white/40 block mb-1">{label}</span>
+      {textarea ? (
+        <textarea className={cls} rows={3} value={value} placeholder={placeholder} onChange={(e) => onChange(e.target.value)} />
+      ) : (
+        <input className={cls} type={type} value={value} placeholder={placeholder} onChange={(e) => onChange(e.target.value)} />
+      )}
+    </label>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<UntitledApp />);
+</script>
+</body>
+</html>
