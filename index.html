@@ -11,19 +11,19 @@
 <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 <style>
   html, body, #root { height: 100%; margin: 0; background: #050505; }
-  ::selection { background: #ff5500; color: #000; }
+  ::selection { background: #7b61ff; color: #000; }
   input[type="range"] { -webkit-appearance: none; appearance: none; height: 2px; background: rgba(255,255,255,.2); }
   input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; width: 18px; height: 18px; background: #fff; border-radius: 0; }
-  button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 1px solid #ff5500; outline-offset: 2px; }
+  button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 1px solid #7b61ff; outline-offset: 2px; }
   @keyframes eq1 { 0%,100%{height:30%} 50%{height:100%} }
   @keyframes eq2 { 0%,100%{height:100%} 50%{height:40%} }
   @keyframes eq3 { 0%,100%{height:55%} 50%{height:85%} }
-  .eq span { display:block; width:2px; background:#ff5500; }
+  .eq span { display:block; width:2px; background:#7b61ff; }
   .eq span:nth-child(1){ animation: eq1 .9s ease-in-out infinite; }
   .eq span:nth-child(2){ animation: eq2 .7s ease-in-out infinite; }
   .eq span:nth-child(3){ animation: eq3 1.1s ease-in-out infinite; }
   @keyframes blink { 0%,55%{opacity:1} 56%,100%{opacity:0} }
-  .caret { animation: blink 1.2s steps(1) infinite; color:#ff5500; }
+  .caret { animation: blink 1.2s steps(1) infinite; color:#7b61ff; }
   @media (prefers-reduced-motion: reduce) {
     .eq span, .caret, .animate-pulse { animation: none !important; }
   }
@@ -951,13 +951,13 @@ function UntitledApp() {
           <h2 className="text-2xl font-bold tracking-tight leading-tight break-words">{current.title}</h2>
         </div>
         <div className="w-full">
-          <Waveform samples={current.waveform} progress={progress} onSeek={seek} height={110} color="#ff5500"
+          <Waveform samples={current.waveform} progress={progress} onSeek={seek} height={110} color="#7b61ff"
             markers={[
               abLoop.a != null && current.duration ? abLoop.a / current.duration : null,
               abLoop.b != null && current.duration ? abLoop.b / current.duration : null,
             ]} />
           <div className="flex justify-between text-[11px] mt-2 tabular-nums">
-            <span style={{ color: "#ff5500" }}>{timecode(currentTime)}</span>
+            <span style={{ color: "#7b61ff" }}>{timecode(currentTime)}</span>
             <span className="text-white/40">{timecode(current.duration)}</span>
           </div>
         </div>
@@ -973,7 +973,7 @@ function UntitledApp() {
           )}
           <button onClick={toggleAB}
             className={`text-[13px] border px-2 py-1 ${abLoop.a != null ? "text-black" : "border-white/30 text-white/40"}`}
-            style={abLoop.a != null ? { backgroundColor: "#ff5500", borderColor: "#ff5500" } : {}}>
+            style={abLoop.a != null ? { backgroundColor: "#7b61ff", borderColor: "#7b61ff" } : {}}>
             a-b
           </button>
         </div>
@@ -1012,7 +1012,7 @@ function UntitledApp() {
         <div className="relative px-5 flex items-center gap-3 pb-4">
           <button onClick={() => startQueue(sharedProject.tracks.map((t) => t.id), sharedProject.name)}
             className="w-12 h-12 rounded-full flex items-center justify-center text-black text-lg active:scale-95 transition-transform"
-            style={{ backgroundColor: "#ff5500" }} aria-label="tout lire">
+            style={{ backgroundColor: "#7b61ff" }} aria-label="tout lire">
             ▶
           </button>
           <SmallButton onClick={() => startQueue(shuffleArray(sharedProject.tracks.map((t) => t.id)), `${sharedProject.name} · aléatoire`)}>⤨ aléatoire</SmallButton>
@@ -1031,7 +1031,7 @@ function UntitledApp() {
       {current && !showPlayer && (
         <button onClick={() => setShowPlayer(true)}
           className="absolute bottom-4 left-0 right-0 border-t border-white/10 bg-black/85 backdrop-blur px-5 py-3 flex items-center justify-between overflow-hidden">
-          <div className="absolute top-0 left-0 h-[2px]" style={{ width: `${progress * 100}%`, backgroundColor: "#ff5500" }} />
+          <div className="absolute top-0 left-0 h-[2px]" style={{ width: `${progress * 100}%`, backgroundColor: "#7b61ff" }} />
           <span className="text-[13px] font-medium truncate relative z-10">{current.title}</span>
           <span className="text-lg relative z-10 px-2" onClick={(e) => { e.stopPropagation(); play(current); }}>
             {isPlaying ? "❚❚" : "▶"}
@@ -1069,7 +1069,7 @@ function UntitledApp() {
       <div className="h-screen w-full bg-black text-white flex flex-col items-center justify-center px-8" style={mono}>
         <div className="flex items-end gap-1 mb-2" aria-hidden="true">
           {[18, 34, 12, 42, 26, 48, 20, 38, 14, 30, 44, 22, 36, 16, 28].map((h, i) => (
-            <div key={i} style={{ width: 3, height: h, backgroundColor: i === 5 ? "#ff5500" : "rgba(255,255,255,0.25)" }} />
+            <div key={i} style={{ width: 3, height: h, backgroundColor: i === 5 ? "#7b61ff" : "rgba(255,255,255,0.25)" }} />
           ))}
         </div>
         <h1 className="text-4xl font-bold tracking-tight mb-2">Musifinity<span className="caret">_</span></h1>
@@ -1077,7 +1077,7 @@ function UntitledApp() {
         <div className="w-full max-w-xs flex flex-col gap-5">
           <Field label="email" value={authEmail} onChange={setAuthEmail} placeholder="toi@email.com" type="email" />
           <Field label="mot de passe" value={authPassword} onChange={setAuthPassword} placeholder="6 caractères min" type="password" />
-          {authError && <p className="text-[12px] text-white/70 border-l-2 pl-3 py-1" style={{ borderColor: "#ff5500" }}>{authError}</p>}
+          {authError && <p className="text-[12px] text-white/70 border-l-2 pl-3 py-1" style={{ borderColor: "#7b61ff" }}>{authError}</p>}
           <button onClick={submitAuth} disabled={authBusy}
             className="bg-white text-black py-3.5 text-[14px] font-semibold disabled:opacity-50 active:scale-[0.98] transition-transform">
             {authBusy ? "…" : authMode === "login" ? "se connecter" : "créer mon compte"}
@@ -1094,9 +1094,9 @@ function UntitledApp() {
 
   return (
     <div className="h-screen w-full bg-black text-white flex flex-col overflow-hidden relative" style={mono}>
-      <input ref={fileInputRef} type="file" accept="audio/*" multiple className="hidden"
+      <input ref={fileInputRef} type="file" accept="audio/*,.mp3,.m4a,.wav,.aac,.flac,.ogg,.aif,.aiff,.webm,audio/mpeg,audio/mp4,audio/x-m4a,audio/wav,audio/aac" multiple className="hidden"
         onChange={(e) => { handleFiles(e.target.files); e.target.value = ""; }} />
-      <input ref={replaceInputRef} type="file" accept="audio/*" className="hidden"
+      <input ref={replaceInputRef} type="file" accept="audio/*,.mp3,.m4a,.wav,.aac,.flac,.ogg,.aif,.aiff,.webm,audio/mpeg,audio/mp4,audio/x-m4a,audio/wav,audio/aac" className="hidden"
         onChange={(e) => {
           const f = e.target.files && e.target.files[0];
           if (f && replaceTargetRef.current) replaceAudio(replaceTargetRef.current, f);
@@ -1276,7 +1276,7 @@ function UntitledApp() {
       {current && !showPlayer && (
         <button onClick={() => setShowPlayer(true)}
           className="absolute bottom-14 left-0 right-0 border-t border-white/10 bg-black/85 backdrop-blur px-5 py-3 flex items-center justify-between overflow-hidden">
-          <div className="absolute top-0 left-0 h-[2px]" style={{ width: `${progress * 100}%`, backgroundColor: "#ff5500" }} />
+          <div className="absolute top-0 left-0 h-[2px]" style={{ width: `${progress * 100}%`, backgroundColor: "#7b61ff" }} />
           <div className="relative z-10 text-left min-w-0">
             <div className="text-[13px] font-medium truncate">{current.title}</div>
             {(hasQueue || rate !== 1) && (
@@ -1296,7 +1296,7 @@ function UntitledApp() {
         {[["library", "bibliothèque"], ["projects", "projets"], ["profile", "profil"]].map(([key, label]) => (
           <button key={key} onClick={() => { setTab(key); if (key !== "projects") setOpenProjectId(null); }}
             className={`flex-1 py-4 text-[12px] relative ${tab === key ? "text-white font-medium" : "text-white/35"}`}>
-            {tab === key && <span className="absolute top-0 left-1/2 -translate-x-1/2 w-6 h-[2px]" style={{ backgroundColor: "#ff5500" }} />}
+            {tab === key && <span className="absolute top-0 left-1/2 -translate-x-1/2 w-6 h-[2px]" style={{ backgroundColor: "#7b61ff" }} />}
             {label}
           </button>
         ))}
@@ -1543,7 +1543,7 @@ function UntitledApp() {
 function Toast({ msg }) {
   return (
     <div className="absolute top-5 left-1/2 -translate-x-1/2 bg-black text-white text-[12px] px-4 py-2.5 z-50 max-w-[85%] text-center border border-white/15 border-l-2"
-      style={{ borderLeftColor: "#ff5500" }}>
+      style={{ borderLeftColor: "#7b61ff" }}>
       {msg}
     </div>
   );
@@ -1596,7 +1596,7 @@ function TrackRow({ track, isCurrent, isPlaying, progress, onPlay, onMore, onDow
               <div key={i} className="flex-1 mx-px"
                 style={{
                   height: Math.max((v > 1 ? v / 100 : v) * 22, 2),
-                  backgroundColor: i / wave.length <= frac ? "#ff5500" : "rgba(255,255,255,0.18)",
+                  backgroundColor: i / wave.length <= frac ? "#7b61ff" : "rgba(255,255,255,0.18)",
                 }} />
             ))}
           </div>
