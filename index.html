@@ -506,11 +506,14 @@ function UntitledApp() {
   useEffect(() => { if (audioRef.current) audioRef.current.loop = loop; }, [loop]);
 
   const applyRate = (audio) => {
-    audio.playbackRate = rateRef.current;
+    const r = rateRef.current;
+    audio.playbackRate = r;
+    // à vitesse 1×, aucun traitement : on laisse le moteur de pitch désengagé pour une qualité intacte
+    const pp = r === 1 ? true : preservePitchRef.current;
     try {
-      audio.preservesPitch = preservePitchRef.current;
-      audio.mozPreservesPitch = preservePitchRef.current;
-      audio.webkitPreservesPitch = preservePitchRef.current;
+      audio.preservesPitch = pp;
+      audio.mozPreservesPitch = pp;
+      audio.webkitPreservesPitch = pp;
     } catch {}
   };
   useEffect(() => { if (audioRef.current) applyRate(audioRef.current); /* eslint-disable-line */ }, [rate, preservePitch]);
@@ -648,10 +651,16 @@ function UntitledApp() {
 
   const startRecording = async () => {
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      // qualité musique : on coupe les traitements "voix" (écho, réduction de bruit, gain auto)
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false },
+      });
       const mime = MediaRecorder.isTypeSupported("audio/mp4") ? "audio/mp4"
         : MediaRecorder.isTypeSupported("audio/webm") ? "audio/webm" : "";
-      const recorder = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
+      const recorder = new MediaRecorder(stream, {
+        ...(mime ? { mimeType: mime } : {}),
+        audioBitsPerSecond: 256000,
+      });
       recordChunksRef.current = [];
       recorder.ondataavailable = (e) => { if (e.data.size > 0) recordChunksRef.current.push(e.data); };
       recorder.onstop = async () => {
@@ -769,6 +778,20 @@ function UntitledApp() {
     clearQueue();
     playTrackById(track.id);
   }, [currentId, isPlaying, playTrackById]);
+
+  // lance la lecture depuis un morceau et enchaîne sur le reste de la liste
+  const playFromList = (ids, id, label) => {
+    const audio = audioRef.current;
+    if (currentId === id && audio) {
+      if (isPlaying) { audio.pause(); setIsPlaying(false); }
+      else { audio.play(); setIsPlaying(true); }
+      return;
+    }
+    const index = Math.max(ids.indexOf(id), 0);
+    queueRef.current = { ids, index, label };
+    setQueueInfo({ length: ids.length, index, label });
+    playTrackById(id);
+  };
 
   const seek = (fraction) => {
     const audio = audioRef.current;
@@ -1024,7 +1047,8 @@ function UntitledApp() {
       </div>
       <div className="flex-1 overflow-y-auto px-5 pb-44">
         {sharedProject.tracks.map((t) => (
-          <TrackRow key={t.id} track={t} isCurrent={currentId === t.id} isPlaying={isPlaying} progress={progress} onPlay={() => play(t)}
+          <TrackRow key={t.id} track={t} isCurrent={currentId === t.id} isPlaying={isPlaying} progress={progress}
+            onPlay={() => playFromList(sharedProject.tracks.map((x) => x.id), t.id, sharedProject.name)}
             onDownload={() => downloadTrack(t)} />
         ))}
       </div>
@@ -1165,7 +1189,7 @@ function UntitledApp() {
               )}
               {tracks.map((t) => (
                 <TrackRow key={t.id} track={t} isCurrent={currentId === t.id} isPlaying={isPlaying} progress={progress}
-                  onPlay={() => play(t)} onMore={() => setSheetTrackId(t.id)} />
+                  onPlay={() => playFromList(tracks.map((x) => x.id), t.id, "bibliothèque")} onMore={() => setSheetTrackId(t.id)} />
               ))}
             </React.Fragment>
           )
@@ -1251,7 +1275,7 @@ function UntitledApp() {
                 .filter(Boolean)
                 .map((t) => (
                   <TrackRow key={t.id} track={t} isCurrent={currentId === t.id} isPlaying={isPlaying} progress={progress}
-                    onPlay={() => play(t)} onMore={() => setSheetTrackId(t.id)} />
+                    onPlay={() => playFromList(openProject.trackIds, t.id, openProject.name)} onMore={() => setSheetTrackId(t.id)} />
                 ))
             )}
           </div>
@@ -1368,7 +1392,8 @@ function UntitledApp() {
                   <p className="text-[10px] tracking-[0.2em] text-white/35 uppercase pt-4 pb-1">morceaux</p>
                   {foundTracks.map((t) => (
                     <TrackRow key={t.id} track={t} isCurrent={currentId === t.id} isPlaying={isPlaying} progress={progress}
-                      onPlay={() => play(t)} onMore={() => { setShowSearch(false); setSearchQuery(""); setSheetTrackId(t.id); }} />
+                      onPlay={() => playFromList(foundTracks.map((x) => x.id), t.id, "recherche")}
+                      onMore={() => { setShowSearch(false); setSearchQuery(""); setSheetTrackId(t.id); }} />
                   ))}
                 </React.Fragment>
               )}
