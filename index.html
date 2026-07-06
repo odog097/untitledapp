@@ -9,6 +9,11 @@
 <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
 <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
 <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script>
+  if ("serviceWorker" in navigator) {
+    navigator.serviceWorker.register("./sw.js").catch(() => {});
+  }
+</script>
 <style>
   html, body, #root { height: 100%; margin: 0; background: #050505; }
   ::selection { background: #7b61ff; color: #000; }
@@ -183,7 +188,7 @@ function makeSupabase() {
       session = await r.json();
       persist();
       return true;
-    } catch { return false; }
+    } catch { return "offline"; } // pas de réseau : on garde la session locale
   };
 
   const request = async (path, opts = {}, retried = false) => {
@@ -347,6 +352,9 @@ function UntitledApp() {
   const [listenLoading, setListenLoading] = useState(false);
   const [sharedProject, setSharedProject] = useState(null);
   const [statsView, setStatsView] = useState(null);
+  const [offlineIds, setOfflineIds] = useState(() => {
+    try { return JSON.parse(localStorage.getItem("musifinity_offline") || "[]"); } catch { return []; }
+  });
 
   const [sheetTrackId, setSheetTrackId] = useState(null);
   const [trimState, setTrimState] = useState(null);
@@ -455,19 +463,39 @@ function UntitledApp() {
         if (!projIds.has(pt.project_id)) continue;
         (byProject[pt.project_id] = byProject[pt.project_id] || []).push(pt);
       }
-      setTracks(trackRows.map((t) => ({
+      const mappedTracks = trackRows.map((t) => ({
         ...t,
         url: sb.publicUrl("audio", t.file_path),
         waveform: Array.isArray(t.waveform) ? t.waveform : [],
-      })));
-      setProjects(projectRows.map((p) => ({
+      }));
+      const mappedProjects = projectRows.map((p) => ({
         ...p,
         trackIds: (byProject[p.id] || []).sort((a, b) => a.position - b.position).map((x) => x.track_id),
-      })));
+      }));
+      setTracks(mappedTracks);
+      setProjects(mappedProjects);
       if (profRows[0]) setProfile(profRows[0]);
+      // copie locale pour le mode hors-ligne
+      try {
+        localStorage.setItem("musifinity_data", JSON.stringify({
+          tracks: mappedTracks, projects: mappedProjects, profile: profRows[0] || null,
+        }));
+      } catch {}
     } catch (e) {
       console.error(e);
-      notify("erreur de chargement de la bibliothèque");
+      // hors-ligne : on repart de la dernière copie locale de la bibliothèque
+      let restored = false;
+      try {
+        const cached = JSON.parse(localStorage.getItem("musifinity_data") || "null");
+        if (cached && Array.isArray(cached.tracks)) {
+          setTracks(cached.tracks);
+          setProjects(cached.projects || []);
+          if (cached.profile) setProfile(cached.profile);
+          restored = true;
+          notify("mode hors-ligne — bibliothèque locale");
+        }
+      } catch {}
+      if (!restored) notify("erreur de chargement de la bibliothèque");
     } finally { setLoadingData(false); }
   };
 
@@ -900,10 +928,41 @@ function UntitledApp() {
   const viewStats = async (project) => {
     setStatsView({ loading: true });
     try {
-      const rows = await sb.select("listens", `select=listener_name,created_at&project_id=eq.${project.id}&order=created_at.desc`);
+      const [rows, commentRows] = await Promise.all([
+        sb.select("listens", `select=listener_name,created_at&project_id=eq.${project.id}&order=created_at.desc`),
+        sb.select("comments", `select=author_name,body,created_at&project_id=eq.${project.id}&order=created_at.desc`).catch(() => []),
+      ]);
       const names = [...new Set(rows.map((r) => r.listener_name || "anonyme"))];
-      setStatsView({ plays: rows.length, listeners: names });
-    } catch { setStatsView({ plays: 0, listeners: [] }); }
+      setStatsView({ plays: rows.length, listeners: names, comments: commentRows });
+    } catch { setStatsView({ plays: 0, listeners: [], comments: [] }); }
+  };
+
+  // ─── stockage interne (hors-ligne) ─────────────────────────────────────
+
+  const toggleOffline = async (track) => {
+    if (!("caches" in window)) { notify("stockage hors-ligne non supporté ici"); return; }
+    try {
+      const cache = await caches.open("mf-audio-v1");
+      if (offlineIds.includes(track.id)) {
+        await cache.delete(track.url);
+        const next = offlineIds.filter((x) => x !== track.id);
+        setOfflineIds(next);
+        localStorage.setItem("musifinity_offline", JSON.stringify(next));
+        notify("retiré du stockage interne");
+      } else {
+        setBusyMsg(`téléchargement de « ${track.title} »…`);
+        const r = await fetch(track.url);
+        if (!r.ok) throw new Error(r.status);
+        await cache.put(track.url, r);
+        const next = [...offlineIds, track.id];
+        setOfflineIds(next);
+        localStorage.setItem("musifinity_offline", JSON.stringify(next));
+        notify("gardé sur l'appareil — écoutable hors-ligne ✓");
+      }
+    } catch (e) {
+      console.error(e);
+      notify("échec du stockage hors-ligne");
+    } finally { setBusyMsg(""); }
   };
 
   // ─── écoute partagée (lien ou code) ───────────────────────────────────
@@ -925,10 +984,12 @@ function UntitledApp() {
         waveform: Array.isArray(t.waveform) ? t.waveform : [],
       }));
       if (!loaded.length) throw new Error("vide");
+      const commentRows = await sb.select("comments",
+        `select=id,author_name,body,created_at&project_id=eq.${proj.id}&order=created_at.asc`).catch(() => []);
       setSharedProject({
         code, projectId: proj.id, name: proj.name,
         artist: (profs[0] && profs[0].artist_name) || "artiste",
-        cover: proj.cover_url, tracks: loaded,
+        cover: proj.cover_url, tracks: loaded, comments: commentRows,
       });
       setShowListen(false);
       setListenCode("");
@@ -938,6 +999,27 @@ function UntitledApp() {
       }).catch(() => {});
     } catch { notify("lien ou code introuvable"); }
     finally { setListenLoading(false); }
+  };
+
+  const postComment = async (name, body) => {
+    if (!sharedProject || !body.trim()) return false;
+    try {
+      const rows = await sb.insert("comments", {
+        project_id: sharedProject.projectId,
+        author_name: (name || "anonyme").trim().slice(0, 40) || "anonyme",
+        body: body.trim().slice(0, 500),
+      });
+      const added = Array.isArray(rows) ? rows[0] : rows;
+      setSharedProject((prev) => prev
+        ? { ...prev, comments: [...(prev.comments || []), added] }
+        : prev);
+      try { localStorage.setItem("musifinity_commenter", (name || "").trim().slice(0, 40)); } catch {}
+      return true;
+    } catch (e) {
+      console.error(e);
+      notify("échec de l'envoi du commentaire");
+      return false;
+    }
   };
 
   const closeSharedProject = () => {
@@ -1051,6 +1133,7 @@ function UntitledApp() {
             onPlay={() => playFromList(sharedProject.tracks.map((x) => x.id), t.id, sharedProject.name)}
             onDownload={() => downloadTrack(t)} />
         ))}
+        <CommentsSection comments={sharedProject.comments || []} onPost={postComment} />
       </div>
       {current && !showPlayer && (
         <button onClick={() => setShowPlayer(true)}
@@ -1189,6 +1272,7 @@ function UntitledApp() {
               )}
               {tracks.map((t) => (
                 <TrackRow key={t.id} track={t} isCurrent={currentId === t.id} isPlaying={isPlaying} progress={progress}
+                  offline={offlineIds.includes(t.id)}
                   onPlay={() => playFromList(tracks.map((x) => x.id), t.id, "bibliothèque")} onMore={() => setSheetTrackId(t.id)} />
               ))}
             </React.Fragment>
@@ -1275,6 +1359,7 @@ function UntitledApp() {
                 .filter(Boolean)
                 .map((t) => (
                   <TrackRow key={t.id} track={t} isCurrent={currentId === t.id} isPlaying={isPlaying} progress={progress}
+                    offline={offlineIds.includes(t.id)}
                     onPlay={() => playFromList(openProject.trackIds, t.id, openProject.name)} onMore={() => setSheetTrackId(t.id)} />
                 ))
             )}
@@ -1428,6 +1513,15 @@ function UntitledApp() {
               setSheetTrackId(null);
               downloadTrack(t);
             }} />
+            <SheetAction
+              label={offlineIds.includes(sheetTrack.id)
+                ? "✓ gardé hors-ligne — retirer du stockage"
+                : "◉ garder hors-ligne (stockage interne)"}
+              onClick={() => {
+                const t = sheetTrack;
+                setSheetTrackId(null);
+                toggleOffline(t);
+              }} />
             <div className="py-2">
               <span className="text-[11px] text-white/40 block mb-1">notes</span>
               <NotesEditor key={sheetTrack.id} initial={sheetTrack.notes || ""} onSave={(v) => updateTrack(sheetTrack.id, { notes: v })} />
@@ -1516,11 +1610,26 @@ function UntitledApp() {
               <p className="text-3xl font-semibold tabular-nums">{statsView.plays}</p>
               <p className="text-[12px] text-white/40 -mt-3">ouverture{statsView.plays > 1 ? "s" : ""} du projet</p>
               {statsView.listeners.length > 0 ? (
-                <div className="flex flex-col items-center gap-1 max-h-48 overflow-y-auto">
+                <div className="flex flex-col items-center gap-1 max-h-36 overflow-y-auto">
                   {statsView.listeners.map((l) => <span key={l} className="text-[13px] text-white/70">{l}</span>)}
                 </div>
               ) : (
                 <p className="text-[12px] text-white/30">personne pour l'instant</p>
+              )}
+              {(statsView.comments || []).length > 0 && (
+                <div className="w-full max-w-sm" onClick={(e) => e.stopPropagation()}>
+                  <p className="text-[10px] tracking-[0.2em] text-white/35 uppercase pb-2 text-center">
+                    commentaires ({statsView.comments.length})
+                  </p>
+                  <div className="max-h-44 overflow-y-auto flex flex-col gap-2">
+                    {statsView.comments.map((c, i) => (
+                      <div key={c.id || i} className="bg-white/5 rounded-xl px-3 py-2">
+                        <span className="text-[11px] font-semibold">{c.author_name || "anonyme"}</span>
+                        <p className="text-[12px] text-white/75 break-words">{c.body}</p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
               )}
             </React.Fragment>
           )}
@@ -1595,7 +1704,63 @@ function CoverThumb({ cover, size = 48, placeholder = "", seed = "" }) {
   );
 }
 
-function TrackRow({ track, isCurrent, isPlaying, progress, onPlay, onMore, onDownload }) {
+function CommentsSection({ comments, onPost }) {
+  const [name, setName] = useState(() => {
+    try { return localStorage.getItem("musifinity_commenter") || ""; } catch { return ""; }
+  });
+  const [body, setBody] = useState("");
+  const [sending, setSending] = useState(false);
+
+  const send = async () => {
+    if (!body.trim() || sending) return;
+    setSending(true);
+    const ok = await onPost(name, body);
+    if (ok) setBody("");
+    setSending(false);
+  };
+
+  const fmtDate = (iso) => {
+    try {
+      return new Date(iso).toLocaleDateString("fr-FR", { day: "numeric", month: "short" });
+    } catch { return ""; }
+  };
+
+  return (
+    <div className="pt-6">
+      <p className="text-[10px] tracking-[0.2em] text-white/35 uppercase pb-2">
+        commentaires{comments.length > 0 ? ` (${comments.length})` : ""}
+      </p>
+      {comments.length === 0 && (
+        <p className="text-[12px] text-white/30 pb-3">aucun commentaire — sois le premier</p>
+      )}
+      {comments.map((c, i) => (
+        <div key={c.id || i} className="py-2.5 border-b border-white/10">
+          <div className="flex items-baseline gap-2">
+            <span className="text-[12px] font-semibold">{c.author_name || "anonyme"}</span>
+            <span className="text-[10px] text-white/30">{fmtDate(c.created_at)}</span>
+          </div>
+          <p className="text-[13px] text-white/80 mt-0.5 break-words">{c.body}</p>
+        </div>
+      ))}
+      <div className="pt-4 flex flex-col gap-2">
+        <input value={name} onChange={(e) => setName(e.target.value)} placeholder="ton nom (optionnel)"
+          className="bg-white/10 rounded-xl px-3.5 py-2.5 text-[13px] outline-none placeholder-white/30" />
+        <div className="flex gap-2">
+          <input value={body} onChange={(e) => setBody(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && send()}
+            placeholder="laisse un commentaire…" maxLength={500}
+            className="flex-1 bg-white/10 rounded-xl px-3.5 py-2.5 text-[13px] outline-none placeholder-white/30 min-w-0" />
+          <button onClick={send} disabled={sending || !body.trim()}
+            className="rounded-xl bg-white text-black px-4 text-[13px] font-semibold disabled:opacity-30">
+            {sending ? "…" : "envoyer"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function TrackRow({ track, isCurrent, isPlaying, progress, onPlay, onMore, onDownload, offline = false }) {
   const wave = (track.waveform || []).filter((_, i) => i % 2 === 0);
   const frac = isCurrent ? progress || 0 : 0;
   return (
@@ -1610,6 +1775,7 @@ function TrackRow({ track, isCurrent, isPlaying, progress, onPlay, onMore, onDow
           <span className={`text-[14px] truncate ${isCurrent ? "font-semibold" : "font-normal"}`}>
             {track.title}
           </span>
+          {offline ? <span className="text-[#7b61ff] text-[10px] shrink-0" title="disponible hors-ligne">◉</span> : null}
           {track.notes ? <span className="text-white/30 text-[12px] shrink-0">✎</span> : null}
           {isCurrent && isPlaying && (
             <span className="eq flex items-end gap-[2px] h-3 shrink-0"><span/><span/><span/></span>
