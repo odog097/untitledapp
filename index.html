@@ -9,24 +9,6 @@
 <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
 <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
 <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-<script>
-  // Service worker : chargé après l'app, jamais bloquant.
-  // Échappatoire : ajouter ?nosw à l'URL désactive et purge le SW.
-  (function () {
-    if (!("serviceWorker" in navigator)) return;
-    var params = new URLSearchParams(location.search);
-    if (params.has("nosw")) {
-      navigator.serviceWorker.getRegistrations().then(function (regs) {
-        regs.forEach(function (r) { r.unregister(); });
-      });
-      if (window.caches) caches.keys().then(function (ks) { ks.forEach(function (k) { caches.delete(k); }); });
-      return;
-    }
-    window.addEventListener("load", function () {
-      navigator.serviceWorker.register("./sw.js").catch(function () {});
-    });
-  })();
-</script>
 <style>
   html, body, #root { height: 100%; margin: 0; background: #050505; }
   ::selection { background: #7b61ff; color: #000; }
@@ -1856,6 +1838,23 @@ function Field({ label, value, onChange, placeholder = "", textarea = false, typ
 }
 
 ReactDOM.createRoot(document.getElementById("root")).render(<UntitledApp />);
+</script>
+<script>
+  /* Service worker enregistré en dernier, en JS standard (hors Babel), jamais bloquant.
+     Échappatoire : ajouter ?nosw à l'URL le désactive et purge tous les caches. */
+  (function () {
+    if (!("serviceWorker" in navigator)) return;
+    if (new URLSearchParams(location.search).has("nosw")) {
+      navigator.serviceWorker.getRegistrations().then(function (regs) {
+        regs.forEach(function (r) { r.unregister(); });
+      });
+      if (window.caches) caches.keys().then(function (ks) { ks.forEach(function (k) { caches.delete(k); }); });
+      return;
+    }
+    window.addEventListener("load", function () {
+      navigator.serviceWorker.register("./sw.js").catch(function () {});
+    });
+  })();
 </script>
 </body>
 </html>
