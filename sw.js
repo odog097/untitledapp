@@ -19,8 +19,9 @@ self.addEventListener("fetch", (e) => {
   if (e.request.method !== "GET") return;
   const url = new URL(e.request.url);
 
-  // 1) app (index.html) : réseau d'abord pour rester à jour, cache en secours hors-ligne
-  if (url.origin === location.origin) {
+  // 1) navigation (ouverture de l'app) : réseau d'abord, cache seulement si vraiment hors-ligne.
+  //    On ne sert JAMAIS une page cassée : en cas de doute, on laisse passer le réseau.
+  if (e.request.mode === "navigate" || (url.origin === location.origin && url.pathname.endsWith(".html"))) {
     e.respondWith(
       fetch(e.request)
         .then((r) => {
@@ -31,7 +32,18 @@ self.addEventListener("fetch", (e) => {
         .catch(() =>
           caches.match(e.request, { ignoreSearch: true })
             .then((hit) => hit || caches.match("./index.html"))
+            .then((hit) => hit || fetch(e.request))
         )
+    );
+    return;
+  }
+
+  // autres fichiers same-origin
+  if (url.origin === location.origin) {
+    e.respondWith(
+      fetch(e.request).catch(() =>
+        caches.match(e.request, { ignoreSearch: true })
+      )
     );
     return;
   }
